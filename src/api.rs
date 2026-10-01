@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use tokio::time::Duration;
+use tower::ServiceExt;
 
 use crate::config;
 use crate::credential;
@@ -1729,13 +1730,46 @@ pub fn build_router() -> Router {
         .fallback(static_files)
 }
 
+/// 全局共享 Router：本地 HTTP 服务（无头压测/兼容用）与 gc:// 自定义协议
+/// 共用同一套路由，行为完全一致。
+static SHARED_ROUTER: OnceLock<Router> = OnceLock::new();
+
+pub fn shared_router() -> Router {
+    SHARED_ROUTER.get_or_init(build_router).clone()
+}
+
+/// gc:// 自定义协议入口：把 webview 的请求（页面资源 + /api/*）原样转发给
+/// 共享 Router。相对路径即同源，前端无需感知端口，也不存在 CORS。
+pub async fn handle_protocol_request(
+    req: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let (parts, body) = req.into_parts();
+    let axum_req =
+        tauri::http::Request::from_parts(parts, axum::body::Body::from(body));
+    let resp = shared_router().oneshot(axum_req).await;
+    let (parts, body) = match resp {
+        Ok(r) => r.into_parts(),
+        Err(_) => {
+            return tauri::http::Response::builder()
+                .status(500)
+                .body(b"router error".to_vec())
+                .unwrap()
+        }
+    };
+    // API/静态响应均为小体积 JSON/文本，32MB 上限绰绰有余
+    let bytes = axum::body::to_bytes(body, 32 * 1024 * 1024)
+        .await
+        .unwrap_or_default();
+    tauri::http::Response::from_parts(parts, bytes.to_vec())
+}
+
 /// 在 127.0.0.1 随机端口上启动 HTTP 服务，返回实际端口
 pub async fn start_server() -> Result<u16, String> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let router = build_router();
+    let router = shared_router();
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });

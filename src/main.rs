@@ -32,6 +32,7 @@ fn main() {
         }
     };
     let _guard = rt.enter();
+    let rt_handle = rt.handle().clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -41,6 +42,17 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        // gc:// 自定义协议：webview 的全部请求（页面 + /api/*）同源桥接到
+        // axum 共享 Router —— 前端零改动、无 CORS、无需感知随机端口。
+        // 注意：此回调运行在 webview 事件线程，必须用显式 Handle 投递到
+        // 自建 tokio runtime。
+        .register_asynchronous_uri_scheme_protocol("gc", move |_ctx, req, responder| {
+            let h = rt_handle.clone();
+            h.spawn(async move {
+                let resp = api::handle_protocol_request(req).await;
+                responder.respond(resp);
+            });
+        })
         .setup(|app| {
             paths::ensure_dirs();
             // 修正旧版 git config 追加出来的 .gitconfig 段落顺序（凭据 helper 被清零的 bug）
@@ -61,7 +73,8 @@ fn main() {
                 std::process::exit(1);
             }
 
-            // 启动本地 HTTP 服务（127.0.0.1 随机端口，局域网内其他设备无法访问）
+            // 启动本地 HTTP 服务（127.0.0.1 随机端口，局域网内其他设备无法访问）。
+            // 窗口已改走 gc:// 协议；HTTP 端口保留给无头压测与外部工具。
             let port = match tokio::runtime::Handle::current().block_on(api::start_server()) {
                 Ok(p) => p,
                 Err(e) => {
@@ -69,7 +82,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let url = format!("http://127.0.0.1:{port}/");
+            let _ = port;
 
             // 窗口状态恢复 / 创建（GC_HEADLESS=1 时跳过窗口，只起服务供压测）
             let headless = std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1");
@@ -78,10 +91,11 @@ fn main() {
                 let saved = config::load_config(false)["window"].clone();
                 let (w, h, x, y) = win::clamp_window(&saved);
 
+                let gc_url = tauri::Url::parse("gc://localhost/").expect("非法 gc:// URL");
                 let mut wb = tauri::WebviewWindowBuilder::new(
                     app,
                     "main",
-                    WebviewUrl::External(url.parse().expect("非法本地 URL")),
+                    WebviewUrl::CustomProtocol(gc_url),
                 )
                 .title("Github Control")
                 .inner_size(w, h)
@@ -113,6 +127,16 @@ fn main() {
                         let _ = window.set_icon(img);
                     }
                 }
+
+                // 兜底：协议异常导致页面 8 秒仍未加载完时，强制显示窗口，
+                // 避免用户面对一个"隐形"的应用
+                let w8 = window.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(8));
+                    if !w8.is_visible().unwrap_or(true) {
+                        let _ = w8.show();
+                    }
+                });
             }
 
             api::set_app_handle(app.handle().clone());
