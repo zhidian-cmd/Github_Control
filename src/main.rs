@@ -22,7 +22,28 @@ mod worktree_probe;
 
 use tauri::{Manager, WebviewUrl};
 
+/// 启动各阶段耗时记录：写 data/logs/boot.log，用于诊断"启动慢"卡在哪一段
+pub(crate) fn boot_log(stage: &str, t0: std::time::Instant) {
+    let line = format!(
+        "[boot] {} +{}ms {stage}",
+        paths::now_iso(),
+        t0.elapsed().as_millis()
+    );
+    let p = paths::logs_dir().join("boot.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        use std::io::Write;
+        let _ = f.write_all(line.as_bytes());
+        let _ = f.write_all(b"\n");
+    }
+}
+
 fn main() {
+    let t0 = std::time::Instant::now();
+    boot_log("process start", t0);
+
+    // 无头模式（GC_HEADLESS=1）不建窗口，只起服务供压测
+    let headless = std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1");
+
     // 自建 tokio runtime 驱动 axum 服务；tauri 事件循环在另一个线程
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -53,7 +74,7 @@ fn main() {
                 responder.respond(resp);
             });
         })
-        .setup(|app| {
+        .setup(move |app| {
             paths::ensure_dirs();
             // 修正旧版 git config 追加出来的 .gitconfig 段落顺序（凭据 helper 被清零的 bug）
             credential::fix_gitconfig_order();
@@ -83,9 +104,9 @@ fn main() {
                 }
             };
             let _ = port;
+            boot_log("server up", t0);
 
             // 窗口状态恢复 / 创建（GC_HEADLESS=1 时跳过窗口，只起服务供压测）
-            let headless = std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1");
             if !headless {
                 // 恢复窗口状态（钳回虚拟屏幕内）
                 let saved = config::load_config(false)["window"].clone();
@@ -100,13 +121,16 @@ fn main() {
                 .title("Github Control")
                 .inner_size(w, h)
                 .min_inner_size(980.0, 620.0)
-                // 先隐藏：页面加载完成再显示，消除启动白屏闪烁
-                .visible(false)
-                // 页面加载完成 → 显示窗口并聚焦
-                .on_page_load(|w, payload| {
-                    if payload.event() == tauri::webview::PageLoadEvent::Finished {
-                        let _ = w.show();
-                        let _ = w.set_focus();
+                // 窗口立即显示（保证"点了就有"的即时反馈），底色取应用主题的
+                // 暖白 #f4f2ea，内容就绪前的瞬间是主题色而非白屏
+                .background_color(tauri::utils::config::Color(244, 242, 234, 255))
+                // 启动埋点：记录 webview 导航开始/完成时刻（不改变显示行为）
+                .on_page_load(move |_w, payload| {
+                    match payload.event() {
+                        tauri::webview::PageLoadEvent::Started => boot_log("page nav started", t0),
+                        tauri::webview::PageLoadEvent::Finished => {
+                            boot_log("page loaded", t0);
+                        }
                     }
                 });
                 if let (Some(x), Some(y)) = (x, y) {
@@ -120,6 +144,22 @@ fn main() {
                     }
                 };
 
+                // 关闭 WebView2 通用自动填充：它会把提交摘要、仓库地址等输入
+                // 历史存进 WebView 配置文件，并在输入框下弹"保存的信息"下拉，
+                // 用户明确不需要这种历史记录。失败静默忽略，不影响功能。
+                let _ = window.with_webview(|wv| unsafe {
+                    use webview2_com::Microsoft::Web::WebView2::Win32::{
+                        ICoreWebView2_13, ICoreWebView2Profile6,
+                    };
+                    use windows_core::Interface;
+                    let controller = wv.controller();
+                    let Ok(core) = controller.CoreWebView2() else { return };
+                    let Ok(core13) = core.cast::<ICoreWebView2_13>() else { return };
+                    let Ok(profile) = core13.Profile() else { return };
+                    let Ok(profile6) = profile.cast::<ICoreWebView2Profile6>() else { return };
+                    let _ = profile6.SetIsGeneralAutofillEnabled(false);
+                });
+
                 // 窗口图标（标题栏 + 任务栏）；失败仅忽略，不影响功能
                 let ico = paths::assets_dir().join("favicon.ico");
                 if let Ok(bytes) = std::fs::read(&ico) {
@@ -127,16 +167,7 @@ fn main() {
                         let _ = window.set_icon(img);
                     }
                 }
-
-                // 兜底：协议异常导致页面 8 秒仍未加载完时，强制显示窗口，
-                // 避免用户面对一个"隐形"的应用
-                let w8 = window.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(8));
-                    if !w8.is_visible().unwrap_or(true) {
-                        let _ = w8.show();
-                    }
-                });
+                boot_log("window created", t0);
             }
 
             api::set_app_handle(app.handle().clone());

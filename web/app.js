@@ -2090,6 +2090,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderAll();
   if (repo()) showView("#changes"); else showView("#welcome");
 
+  // 启动埋点：页面导航起点到界面可交互的耗时（performance.now 以导航为 0 点）
+  try {
+    api("/api/client_log", {
+      method: "POST",
+      body: { msg: `boot: ui interactive +${Math.round(performance.now())}ms (repo=${repo() ? "yes" : "no"})` },
+    });
+  } catch {}
+
   // 后台异步真实验证登录态（乐观值错了再更新 UI），不阻塞启动（v3.1 #3 第三层）
   api("/api/auth/verify").then((v) => {
     if (v.state !== STATE.auth.state || (v.username || "") !== STATE.auth.username) {

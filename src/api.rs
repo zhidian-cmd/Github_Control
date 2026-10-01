@@ -637,6 +637,10 @@ async fn git_pull(Json(d): Json<Value>) -> Response {
                     &[
                         "pull".into(),
                         "--no-edit".into(),
+                        // --no-rebase 必须带上：重试场景下本地与远端往往已分叉，
+                        // git >= 2.34 不指定合并策略会报 "Need to specify how
+                        // to reconcile divergent branches"，让用户卡死在循环里
+                        "--no-rebase".into(),
                         "--allow-unrelated-histories".into(),
                         "origin".into(),
                         branch,

@@ -32,6 +32,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     "Win32_Foundation",
 ] }
+# 关闭 WebView2 通用自动填充用（版本需与 tauri 内部一致，Cargo.lock 已锁 0.39.1/0.62.2）
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [profile.release]
 opt-level = "s"
