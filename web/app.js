@@ -362,11 +362,18 @@ function renderTopbar() {
   $("#btn-settings").onclick = () => showView("#settings");
 }
 
+/** 目录名/任意字符串 → GitHub 合法仓库名（非法字符替换为 -，首尾 -._ 去掉） */
+function safeRepoName(s) {
+  return String(s || "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[-._]+|[-._]+$/g, "");
+}
+
 /** 推送时创建远程仓库的弹窗 → Promise<{name, private} | null> */
 function askCreateRemote(defaultName) {
   return new Promise((resolve) => {
-    // GitHub 仓库名只允许 ASCII；中文目录名给个空输入框让用户起英文名
-    const safe = /^[A-Za-z0-9._-]+$/.test(defaultName || "") ? defaultName : "";
+    // 中文/特殊字符目录名也净化成合法名预填，而不是留空让用户从零起名
+    const safe = safeRepoName(defaultName);
     $("#generic-title").textContent = "创建远程仓库";
     $("#generic-body").innerHTML = `
       <p style="margin-top:0">本地仓库还没有远程地址。将在你的 GitHub 账号下创建仓库并推送：</p>
@@ -377,8 +384,20 @@ function askCreateRemote(defaultName) {
       </label>
       <label class="check">
         <input type="radio" name="cr-vis" value="public"> 公开 Public（所有人可见）
-      </label>`;
+      </label>
+      <div id="cr-probe" class="hint" style="min-height:18px"></div>`;
     $("#generic-ok").textContent = "创建并推送";
+    // 先探测账号下有没有同名仓库：有则提示改为"关联并推送"，避免创建撞车
+    if (safe) {
+      api(`/api/gh/find_own_repo?name=${encodeURIComponent(safe)}`)
+        .then((d) => {
+          const box = $("#cr-probe");
+          if (!box || !d.ok || !d.exists) return;
+          box.innerHTML = `检测到你的 GitHub 上已有 <b>${esc(d.login)}/${esc(d.name)}</b>，确认后将直接关联并推送（不会重建，以本地内容为准）。`;
+          $("#generic-ok").textContent = "关联并推送";
+        })
+        .catch(() => {});
+    }
     openDialog("#generic-overlay");
     $("#generic-ok").onclick = () => {
       const name = $("#cr-name").value.trim();

@@ -35,6 +35,7 @@ pub struct Q {
     pub word_diff: Option<String>,
     pub n: Option<String>,
     pub id: Option<String>,
+    pub name: Option<String>,
 }
 
 // ---------------- 全局状态 ----------------
@@ -425,6 +426,34 @@ async fn gh_releases(Query(q): Query<Q>) -> Response {
     ok(json!({"ok": true, "releases": gh_runner::release_list(&repo).await}))
 }
 
+/// 探测当前账号下是否已有同名仓库（推送弹窗用，决定是"创建"还是"关联"）
+async fn gh_find_own_repo(Query(q): Query<Q>) -> Response {
+    let name = q.name.unwrap_or_default().trim().to_string();
+    let re = regex::Regex::new(r"^[A-Za-z0-9._-]+$").unwrap();
+    if !re.is_match(&name) {
+        return ok(json!({"ok": false, "error": "无效的仓库名"}));
+    }
+    if credential::get_auth_state(false).await != "logged_in" {
+        return ok(json!({"ok": false, "error": "未登录"}));
+    }
+    let login = gh_login().await;
+    if login.is_empty() {
+        return ok(json!({"ok": false, "error": "获取账号失败"}));
+    }
+    let (vrc, _) = runner::run_gh(
+        &[
+            "repo".into(),
+            "view".into(),
+            format!("{login}/{name}"),
+            "--json".into(),
+            "name".into(),
+        ],
+        Some(60.0),
+    )
+    .await;
+    ok(json!({"ok": true, "login": login, "name": name, "exists": vrc == 0}))
+}
+
 /// 在系统默认浏览器中打开外部 URL（ShellExecuteW "open"）。
 /// 返回 Err(消息) 表示启动失败。
 #[cfg(windows)]
@@ -669,6 +698,52 @@ async fn git_pull(Json(d): Json<Value>) -> Response {
     ok(json!({"ok": false, "error": auth_hint(&out)}))
 }
 
+/// 当前登录的 GitHub 账号名；失败返回空串
+async fn gh_login() -> String {
+    let (rc, out) = runner::run_gh(
+        &["api".into(), "user".into(), "-q".into(), ".login".into()],
+        Some(60.0),
+    )
+    .await;
+    if rc == 0 { out.trim().to_string() } else { String::new() }
+}
+
+/// 把 <login>/<name> 设为 origin 并推送（以本地为准）。
+/// 用于"账号下已有同名仓库"的场景：不重建，直接关联。
+/// 先 fetch 建立 remote-tracking 引用，--force-with-lease 才有租约基准。
+async fn attach_origin_and_push(repo: &str, branch: &str, login: &str, name: &str) -> Value {
+    let url = format!("https://github.com/{login}/{name}.git");
+    let (rca, _) = runner::run_git(
+        &["remote".into(), "add".into(), "origin".into(), url.clone()],
+        Some(repo),
+        None,
+    )
+    .await;
+    if rca != 0 {
+        runner::run_git(&["remote".into(), "set-url".into(), "origin".into(), url], Some(repo), None).await;
+    }
+    runner::run_git(&["fetch".into(), "origin".into()], Some(repo), Some(300.0)).await;
+    let repo2 = repo.to_string();
+    let branch2 = branch.to_string();
+    let (rc, out) = with_net_retry(|| {
+        let repo = repo2.clone();
+        let branch = branch2.clone();
+        async move {
+            runner::run_git(
+                &["push".into(), "--force-with-lease".into(), "-u".into(), "origin".into(), branch],
+                Some(&repo),
+                Some(600.0),
+            )
+            .await
+        }
+    })
+    .await;
+    if rc != 0 {
+        return json!({"ok": false, "error": auth_hint(&out)});
+    }
+    json!({"ok": true, "hint": format!("远程仓库 {login}/{name} 已存在，已直接关联并推送（以本地为准）")})
+}
+
 async fn git_push(Json(d): Json<Value>) -> Response {
     let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let create = d.get("create").cloned();
@@ -715,6 +790,25 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         if credential::get_auth_state(false).await != "logged_in" {
             return ok(json!({"ok": false, "error": "创建远程仓库需要先登录 GitHub"}));
         }
+        // 先探测账号下是否已有同名仓库：有则直接关联推送，不走创建。
+        // （换电脑重新克隆、删了本地重建等场景下，远程同名仓库很常见）
+        let login = gh_login().await;
+        if !login.is_empty() {
+            let (vrc, _) = runner::run_gh(
+                &[
+                    "repo".into(),
+                    "view".into(),
+                    format!("{login}/{name}"),
+                    "--json".into(),
+                    "name".into(),
+                ],
+                Some(60.0),
+            )
+            .await;
+            if vrc == 0 {
+                return ok(attach_origin_and_push(&repo, &branch, &login, &name).await);
+            }
+        }
         let vis = if create.get("private").and_then(|v| v.as_bool()).unwrap_or(false) {
             "--private"
         } else {
@@ -730,40 +824,12 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         .await;
         if rc != 0 {
             if out.to_lowercase().contains("already exists") {
-                // 账号下已有同名仓库：不创建，直接把它设为 origin 推送
-                let (rc2, login_out) = runner::run_gh(
-                    &["api".into(), "user".into(), "-q".into(), ".login".into()],
-                    Some(60.0),
-                )
-                .await;
-                let login = if rc2 == 0 { login_out.trim().to_string() } else { String::new() };
+                // 竞态兜底：探测时不存在、创建时又被占住（或探测请求本身网络失败）
+                let login = if login.is_empty() { gh_login().await } else { login };
                 if login.is_empty() {
                     return ok(json!({"ok": false, "error": "远程已有同名仓库，但获取账号名失败，请到设置里手动填写远程地址"}));
                 }
-                let url = format!("https://github.com/{login}/{name}.git");
-                let (rca, _) = runner::run_git(&["remote".into(), "add".into(), "origin".into(), url.clone()], Some(&repo), None).await;
-                if rca != 0 {
-                    runner::run_git(&["remote".into(), "set-url".into(), "origin".into(), url], Some(&repo), None).await;
-                }
-                let repo2 = repo.clone();
-                let branch2 = branch.clone();
-                let (rc3, out3) = with_net_retry(|| {
-                    let repo = repo2.clone();
-                    let branch = branch2.clone();
-                    async move {
-                        runner::run_git(
-                            &["push".into(), "--force-with-lease".into(), "-u".into(), "origin".into(), branch],
-                            Some(&repo),
-                            Some(600.0),
-                        )
-                        .await
-                    }
-                })
-                .await;
-                if rc3 != 0 {
-                    return ok(json!({"ok": false, "error": auth_hint(&out3)}));
-                }
-                return ok(json!({"ok": true, "hint": format!("远程仓库 {login}/{name} 已存在，已直接推送")}));
+                return ok(attach_origin_and_push(&repo, &branch, &login, &name).await);
             }
             return ok(json!({"ok": false, "error": out.trim()}));
         }
@@ -1706,6 +1772,7 @@ pub fn build_router() -> Router {
         .route("/api/gh/release", post(gh_release))
         .route("/api/gh/release_delete", post(gh_release_delete))
         .route("/api/gh/releases", get(gh_releases))
+        .route("/api/gh/find_own_repo", get(gh_find_own_repo))
         .route("/api/gh/open_web", post(gh_open_web))
         .route("/api/gh/open_url", post(gh_open_url))
         .route("/api/rollback/execute", post(rollback_execute))
