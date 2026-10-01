@@ -425,36 +425,58 @@ async fn gh_releases(Query(q): Query<Q>) -> Response {
     ok(json!({"ok": true, "releases": gh_runner::release_list(&repo).await}))
 }
 
+/// 在系统默认浏览器中打开外部 URL（ShellExecuteW "open"）。
+/// 返回 Err(消息) 表示启动失败。
+#[cfg(windows)]
+fn shell_open_url(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let mut u: Vec<u16> = url.encode_utf16().collect();
+    u.push(0);
+    let mut op: Vec<u16> = "open".encode_utf16().collect();
+    op.push(0);
+    let r = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            u.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL as i32,
+        )
+    };
+    if r as isize <= 32 {
+        Err("系统未找到可用的浏览器".into())
+    } else {
+        Ok(())
+    }
+}
+
 async fn gh_open_web(Json(d): Json<Value>) -> Response {
     let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if !std::path::Path::new(&path).is_dir() {
         return ok(json!({"ok": false, "error": "仓库目录不存在"}));
     }
-    let gh = paths::gh_exe().to_string_lossy().into_owned();
-    let mut cmd = tokio::process::Command::new(&gh);
-    cmd.args(["repo", "view", "--web"])
-        .current_dir(&path)
-        .envs(env::build_env());
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let result = tokio::time::timeout(Duration::from_secs(20), cmd.output()).await;
-    match result {
-        Ok(Ok(o)) => {
-            if o.status.success() {
-                ok(json!({"ok": true}))
-            } else {
-                let err = String::from_utf8_lossy(&o.stderr).into_owned();
-                let err2 = String::from_utf8_lossy(&o.stdout).into_owned();
-                let combined = format!("{}{}", err2, err).trim().to_string();
-                ok(json!({"ok": false, "error": if combined.is_empty() { "打开失败（可能没有设置远程仓库）".to_string() } else { combined }}))
-            }
+    // 直接解析远程地址拼 URL 打开，不再经过 gh 子进程：gh repo view --web
+    // 需要起子进程（20s 超时）且继承代理等环境变量，实际只是打开仓库主页，
+    // 直连系统默认浏览器更快更稳，也不受应用代理配置影响。
+    let remote = git_repo::get_remote(&path).await;
+    if let Some(slug) = remote.strip_prefix("github.com/") {
+        let url = format!("https://github.com/{slug}");
+        #[cfg(windows)]
+        {
+            return ok(match shell_open_url(&url) {
+                Ok(()) => json!({"ok": true, "url": url}),
+                Err(e) => json!({"ok": false, "error": e}),
+            });
         }
-        Ok(Err(e)) => ok(json!({"ok": false, "error": e.to_string()})),
-        Err(_) => ok(json!({"ok": false, "error": "打开超时"})),
+        #[cfg(not(windows))]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+            return ok(json!({"ok": true, "url": url}));
+        }
     }
+    ok(json!({"ok": false, "error": "该仓库没有设置 GitHub 远程地址"}))
 }
 
 /// 在系统默认浏览器中打开外部 URL。
@@ -465,25 +487,15 @@ async fn gh_open_url(Json(d): Json<Value>) -> Response {
         return ok(json!({"ok": false, "error": "仅支持 http/https 链接"}));
     }
     #[cfg(windows)]
-    {
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-        let mut u: Vec<u16> = url.encode_utf16().collect();
-        u.push(0);
-        let mut op: Vec<u16> = "open".encode_utf16().collect();
-        op.push(0);
-        let r = unsafe {
-            ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), u.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL as i32)
-        };
-        if r as isize <= 32 {
-            return ok(json!({"ok": false, "error": "系统未找到可用的浏览器"}));
-        }
-    }
+    return ok(match shell_open_url(&url) {
+        Ok(()) => json!({"ok": true}),
+        Err(e) => json!({"ok": false, "error": e}),
+    });
     #[cfg(not(windows))]
     {
         let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        ok(json!({"ok": true}))
     }
-    ok(json!({"ok": true}))
 }
 
 // ---------------- /api/rollback/* ----------------
