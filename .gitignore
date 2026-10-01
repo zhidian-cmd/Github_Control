@@ -1,0 +1,20 @@
+# Rust 构建产物
+/target
+
+# 运行时生成（由程序自己产生）
+/data
+/config.json
+
+# 便携版 git/gh（用户自行放入；本机测试时是指向 Python 工程的目录联接）
+/runtime
+
+# 本机环境配置（.cargo/config.toml 的代理等，属于个人环境，不入库）
+/.cargo
+
+# tauri 构建自动生成（gen/schemas 等，cargo build 时自动重建）
+/gen
+
+# 系统/编辑器杂项
+Thumbs.db
+.DS_Store
+*.swp

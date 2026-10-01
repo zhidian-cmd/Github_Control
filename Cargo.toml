@@ -1,0 +1,40 @@
+[package]
+name = "github-control"
+version = "0.1.0"
+description = "Github Control - 本地 Git 与 GitHub 桌面控制台（Rust/Tauri 移植版）"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+# 未直接使用。tauri-build 开启 schemars/preserve_order 后，schemars 0.8.22 以
+# IndexMap<K, V> 两参形式使用 indexmap 1.9.3；该版本仅在 std 分支为 S 提供默认
+# 泛型，而其 build.rs 默认靠 autocfg 探测 sysroot（新 rustc 下探测失败会走
+# no_std 分支导致 E0107）。显式开启 std 强制 has_std，绕过探测。
+indexmap = { version = "1.9", features = ["std"] }
+
+[dependencies]
+tauri = { version = "2", features = ["image-ico", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+regex = "1"
+url = "2"
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_Threading",
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation",
+] }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 1
+strip = true
