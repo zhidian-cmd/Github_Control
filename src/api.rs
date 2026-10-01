@@ -763,9 +763,24 @@ async fn git_push(Json(d): Json<Value>) -> Response {
     let (rc, _) = runner::run_git(&["remote".into(), "get-url".into(), "origin".into()], Some(&repo), None).await;
     let mut has_origin = rc == 0;
     if create.is_some() && has_origin {
-        // 旧的远程是死地址（仓库已被删），先移除再重建
-        runner::run_git(&["remote".into(), "remove".into(), "origin".into()], Some(&repo), None).await;
-        has_origin = false;
+        // 弹窗打开期间 origin 可能已被上一次尝试重新关联好。先 ls-remote 验证：
+        // 确认远程真是 404/不存在才删除重建；活着或网络原因验证不了，都保留
+        // origin 直接走推送，避免把刚关联好的远程又删掉造成死循环。
+        let (lsrc, lsout) = runner::run_git(
+            &["ls-remote".into(), "origin".into(), "HEAD".into()],
+            Some(&repo),
+            Some(60.0),
+        )
+        .await;
+        let low = lsout.to_lowercase();
+        let dead = lsrc != 0
+            && (low.contains("repository not found")
+                || low.contains("not found")
+                || low.contains("404"));
+        if dead {
+            runner::run_git(&["remote".into(), "remove".into(), "origin".into()], Some(&repo), None).await;
+            has_origin = false;
+        }
     }
     if !has_origin {
         let create = match &create {
