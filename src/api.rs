@@ -21,6 +21,7 @@ use crate::gh_runner;
 use crate::git_repo;
 use crate::git_rollback;
 use crate::git_status_v2;
+use crate::messages;
 use crate::net;
 use crate::paths;
 use crate::repositories;
@@ -91,6 +92,66 @@ fn auth_hint(out: &str) -> String {
         return format!("{out}\n提示：可能未登录或 token 过期，请到设置页检查。");
     }
     out
+}
+
+/// 带自动恢复的 lease 推送：--force-with-lease 最常见的失败是
+/// "(stale info)"——本地记录的远程位置过期（远程刚被重建/在别处推送过，
+/// 或刚 remote add 还没 fetch）。此时 fetch 刷新租约基准后重试一次即可，
+/// 不用让用户看懂 git 的租约报错。
+async fn push_with_lease(repo: &str, branch: &str, set_upstream: bool) -> (i32, String) {
+    let mut args = vec!["push".to_string(), "--force-with-lease".to_string()];
+    if set_upstream {
+        args.push("-u".into());
+    }
+    args.push("origin".into());
+    args.push(branch.to_string());
+    let attempt = || {
+        let repo = repo.to_string();
+        let args = args.clone();
+        async move { runner::run_git(&args, Some(&repo), Some(600.0)).await }
+    };
+    let (rc, out) = with_net_retry(attempt).await;
+    if rc == 0 {
+        return (rc, out);
+    }
+    if out.to_lowercase().contains("stale info") {
+        runner::run_git(&["fetch".into(), "origin".into()], Some(repo), Some(300.0)).await;
+        return with_net_retry(attempt).await;
+    }
+    (rc, out)
+}
+
+/// 提交前确保 Git 身份存在：全新 data 目录 / 未登录过时 user.name/email
+/// 都可能是空的，git commit 会直接报 "Please tell me who you are"。
+/// 有配置用户名（登录过）就用它兜底写入全局配置。
+async fn ensure_git_identity(repo: &str) {
+    let (rc, _) = runner::run_git(&["config".into(), "user.email".into()], Some(repo), None).await;
+    if rc == 0 {
+        return;
+    }
+    let name = config::load_config(false)["auth"]["username"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let name = if name.is_empty() { "GithubControl".to_string() } else { name };
+    let _ = runner::run_git(
+        &["config".into(), "--global".into(), "user.name".into(), name.clone()],
+        Some(repo),
+        None,
+    )
+    .await;
+    let _ = runner::run_git(
+        &[
+            "config".into(),
+            "--global".into(),
+            "user.email".into(),
+            format!("{name}@users.noreply.github.com"),
+        ],
+        Some(repo),
+        None,
+    )
+    .await;
 }
 
 // ---------------- 静态文件 / 首页 ----------------
@@ -581,7 +642,12 @@ async fn git_commit(Json(d): Json<Value>) -> Response {
         return ok(json!({"ok": false, "error": "请填写提交摘要"}));
     }
     // 无暂存概念：提交即包含全部改动
-    runner::run_git(&["add".into(), "-A".into()], Some(&repo), None).await;
+    let (arc, aout) = runner::run_git(&["add".into(), "-A".into()], Some(&repo), None).await;
+    if arc != 0 {
+        let err = aout.trim();
+        return ok(json!({"ok": false, "error": if err.is_empty() { "暂存改动失败，请重试".to_string() } else { err.to_string() }}));
+    }
+    ensure_git_identity(&repo).await;
     let desc = d.get("description").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let mut args = vec!["commit".into(), "-m".into(), msg];
     if !desc.is_empty() {
@@ -723,21 +789,7 @@ async fn attach_origin_and_push(repo: &str, branch: &str, login: &str, name: &st
         runner::run_git(&["remote".into(), "set-url".into(), "origin".into(), url], Some(repo), None).await;
     }
     runner::run_git(&["fetch".into(), "origin".into()], Some(repo), Some(300.0)).await;
-    let repo2 = repo.to_string();
-    let branch2 = branch.to_string();
-    let (rc, out) = with_net_retry(|| {
-        let repo = repo2.clone();
-        let branch = branch2.clone();
-        async move {
-            runner::run_git(
-                &["push".into(), "--force-with-lease".into(), "-u".into(), "origin".into(), branch],
-                Some(&repo),
-                Some(600.0),
-            )
-            .await
-        }
-    })
-    .await;
+    let (rc, out) = push_with_lease(repo, branch, true).await;
     if rc != 0 {
         return json!({"ok": false, "error": auth_hint(&out)});
     }
@@ -860,30 +912,7 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         return ok(json!({"ok": false, "error": err}));
     }
     let upstream = git_repo::has_upstream(&repo, &branch).await;
-    let repo2 = repo.clone();
-    let branch2 = branch.clone();
-    let (rc, out) = with_net_retry(|| {
-        let repo = repo2.clone();
-        let branch = branch2.clone();
-        async move {
-            if upstream {
-                runner::run_git(
-                    &["push".into(), "--force-with-lease".into(), "origin".into(), branch],
-                    Some(&repo),
-                    Some(600.0),
-                )
-                .await
-            } else {
-                runner::run_git(
-                    &["push".into(), "--force-with-lease".into(), "-u".into(), "origin".into(), branch],
-                    Some(&repo),
-                    Some(600.0),
-                )
-                .await
-            }
-        }
-    })
-    .await;
+    let (rc, out) = push_with_lease(&repo, &branch, !upstream).await;
     ok(json!({"ok": rc == 0, "error": if rc == 0 { Value::Null } else { json!(auth_hint(&out)) }}))
 }
 
@@ -1504,6 +1533,7 @@ async fn repo_init_and_publish(Json(d): Json<Value>) -> Response {
     if rc != 0 {
         return ok(json!({"ok": false, "error": out.trim()}));
     }
+    ensure_git_identity(&path).await;
     // 2. 初始提交（目录为空时静默跳过）
     runner::run_git(&["add".into(), "-A".into()], Some(&path), None).await;
     runner::run_git(&["commit".into(), "-m".into(), "初始提交".into()], Some(&path), None).await;
@@ -1543,6 +1573,23 @@ fn clean_clone_url(u: &str) -> String {
         if let Some(g) = c.get(1) {
             u = g.as_str().trim().to_string();
         }
+    }
+    u
+}
+
+/// 克隆地址归一化：除了完整 URL，也接受 github.com/user/repo 这种
+/// 浏览器地址栏里直接复制的简写（自动补全 https:// 和 .git）。
+fn normalize_clone_url(u: &str) -> String {
+    let u = clean_clone_url(u);
+    if u.contains("://") || u.starts_with("git@") {
+        return u;
+    }
+    let re = regex::Regex::new(
+        r"^(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+    )
+    .unwrap();
+    if let Some(c) = re.captures(&u) {
+        return format!("https://github.com/{}/{}.git", &c[1], &c[2]);
     }
     u
 }
@@ -1597,6 +1644,8 @@ fn spawn_clone_worker(
         let stderr = child.stderr.take().unwrap();
         use tokio::io::AsyncBufReadExt;
         let mut lines = tokio::io::BufReader::new(stderr).lines();
+        // 失败时要从全部输出里提取中文提示（错误行可能在任意位置）
+        let mut all_out = String::new();
         let start = std::time::Instant::now();
         loop {
             tokio::select! {
@@ -1605,6 +1654,8 @@ fn spawn_clone_worker(
                         Ok(Some(l)) => {
                             let _ = writeln!(f, "{l}");
                             let _ = f.flush();
+                            all_out.push_str(&l);
+                            all_out.push('\n');
                         }
                         _ => break,
                     }
@@ -1653,6 +1704,10 @@ fn spawn_clone_worker(
                 let _ = f.flush();
             }
         }
+        // 失败时把中文提示写进日志，前端轮询拿到后直接 toast 给用户
+        if let Some(hint) = messages::matched_hint(&all_out) {
+            let _ = writeln!(f, "HINT:{hint}");
+        }
         let _ = writeln!(f, "EXIT:{rc}");
         let _ = writeln!(f, "REPO:{target_path}");
     });
@@ -1665,7 +1720,7 @@ fn dir_nonempty(p: &str) -> bool {
 }
 
 async fn repo_clone(Json(d): Json<Value>) -> Response {
-    let url = clean_clone_url(d.get("url").and_then(|v| v.as_str()).unwrap_or(""));
+    let url = normalize_clone_url(d.get("url").and_then(|v| v.as_str()).unwrap_or(""));
     let mut path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let all_history = d.get("all_history").and_then(|v| v.as_bool()).unwrap_or(true);
     let all_branches = d.get("all_branches").and_then(|v| v.as_bool()).unwrap_or(true);

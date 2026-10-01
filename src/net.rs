@@ -49,7 +49,7 @@ pub fn proxy_preflight() -> Option<String> {
 }
 
 /// 网络抖动/间歇性故障关键词：命中才重试（git pull/push 重试与 gh 直连重试共用）
-pub const NET_HINTS: [&str; 11] = [
+pub const NET_HINTS: [&str; 22] = [
     "could not resolve host",
     "network is unreachable",
     "rpc failed",
@@ -61,6 +61,18 @@ pub const NET_HINTS: [&str; 11] = [
     "error: 503",
     "internal server error",
     "unexpected status",
+    // —— 实机踩坑补充：schannel 断连 / 隧道失败 / TLS 握手失败 ——
+    "schannel",
+    "server closed abruptly",
+    "early eof",
+    "failed to connect",
+    "connect tunnel failed",
+    "proxy connect aborted",
+    "recv failure",
+    "ssl connect error",
+    "curl 56",
+    "curl 35",
+    "curl 28",
 ];
 
 pub fn is_net_hint(out: &str) -> bool {

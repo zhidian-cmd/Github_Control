@@ -28,7 +28,16 @@ async function api(path, { method = "GET", body } = {}) {
   }
   const data = await res.json().catch(() => ({ ok: false, error: `响应解析失败 (${res.status})` }));
   if (!res.ok || data.ok === false) {
-    const msg = data.error || `请求失败 (${res.status})`;
+    const fallback = {
+      400: "请求参数有误",
+      401: "登录状态已失效，请到设置页重新登录",
+      403: "没有权限执行该操作",
+      404: "接口不存在（可能程序版本不一致，请重启）",
+      500: "后端内部错误，请重启程序；若反复出现请看日志",
+      502: "后端服务不可达，请重启程序",
+      503: "后端服务不可达，请重启程序",
+    }[res.status] || `请求失败 (${res.status})`;
+    const msg = data.error || fallback;
     // Token 中途过期：顶栏徽章立刻变黄（鲁棒 #6）
     if (/Bad credentials|HTTP 401|token 无效|登录已过期/.test(msg)) {
       STATE.auth = { state: "expired", username: "" };
@@ -1702,7 +1711,9 @@ function pollClone(id, url) {
           closeDialog("#generic-overlay");
         } else {
           logEl.textContent += "\n✘ 克隆失败";
-          toast("克隆失败，详见日志", "error");
+          // 后端失败时会在日志里写一条 HINT: 开头的中文提示（网络/认证/地址问题）
+          const hintLine = (d.lines || []).find((l) => l.startsWith("HINT:"));
+          toast(hintLine ? hintLine.slice(5) : "克隆失败，详见日志", "error");
           $("#generic-ok").textContent = "关闭";
         }
       }

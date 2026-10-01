@@ -40,8 +40,18 @@ async fn guess_remote(repo_dir: &str) -> Option<String> {
 
 fn friendly(out: &str) -> String {
     let out = out.trim().to_string();
+    let low = out.to_lowercase();
     if out.contains("Bad credentials") || out.contains("401") {
         return "token 无效或已过期，请重新登录".into();
+    }
+    if out.contains("To get started with GitHub CLI") || out.contains("gh auth login") {
+        return "gh 未登录或登录已失效，请到设置页重新登录 GitHub".into();
+    }
+    if low.contains("not found") || out.contains("404") {
+        return "未找到该仓库或 Release：仓库可能已删除，或私有仓库未登录无权访问".into();
+    }
+    if out.contains("502") || out.contains("503") || out.contains("504") {
+        return "GitHub 服务暂时不可用（网关错误），已自动重试仍失败，请稍后再试".into();
     }
     if out.contains("already_exists") {
         return "该 tag 的 Release 已存在".into();
@@ -150,5 +160,5 @@ pub async fn release_delete(tag: &str, repo_dir: &str) -> Value {
         None,
     )
     .await;
-    json!({"ok": rc == 0, "error": if rc == 0 { Value::Null } else { json!(if out.trim().is_empty() { "删除失败" } else { out.trim() }) }})
+    json!({"ok": rc == 0, "error": if rc == 0 { Value::Null } else { json!(if out.trim().is_empty() { "删除失败".to_string() } else { friendly(&out) }) }})
 }
