@@ -2040,19 +2040,10 @@ function renderAll() {
 
 /* ---------- 窗口状态 ---------- */
 
-// pywebview 的 js_api 是异步的，beforeunload 里的调用会在关窗时被丢弃。
-// 改成定时轮询：值变了才发请求，关窗前最多丢 2 秒内的变化。
-let lastWinSig = "";
-setInterval(() => {
-  try {
-    if (document.hidden) return;  // 最小化时 screenX 会变成 -32000，不保存
-    const sig = `${outerWidth}x${outerHeight}+${screenX}+${screenY}`;
-    if (sig !== lastWinSig) {
-      lastWinSig = sig;
-      native()?.save_window_state?.(outerWidth, outerHeight, screenX, screenY);
-    }
-  } catch { /* 忽略 */ }
-}, 2000);
+// 窗口几何记忆已移交 Rust 端：Moved/Resized 事件采样物理像素，关窗时写盘，
+// 启动时 set_size/set_position 原样设回。前端不再用 outerWidth/screenX 采样——
+// 那套是 CSS 逻辑像素 + 视口原点，和 Tauri 的客户区/外框坐标系差一个标题栏，
+// 每次开关窗口都会累积漂移（旧版"越开越偏"的原因）。
 
 /* ---------- 初始化 ---------- */
 

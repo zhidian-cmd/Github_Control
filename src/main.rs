@@ -108,9 +108,16 @@ fn main() {
 
             // 窗口状态恢复 / 创建（GC_HEADLESS=1 时跳过窗口，只起服务供压测）
             if !headless {
-                // 恢复窗口状态（钳回虚拟屏幕内）
+                // 恢复窗口几何（物理像素，与关窗时保存的坐标系完全一致，无漂移）
                 let saved = config::load_config(false)["window"].clone();
-                let (w, h, x, y) = win::clamp_window(&saved);
+                let geo = win::parse_saved_geo(&saved);
+                let maximized = saved.get("maximized").and_then(|v| v.as_bool()).unwrap_or(false);
+                let scale = app
+                    .primary_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|m| m.scale_factor())
+                    .unwrap_or(1.0);
 
                 let gc_url = tauri::Url::parse("gc://localhost/").expect("非法 gc:// URL");
                 let mut wb = tauri::WebviewWindowBuilder::new(
@@ -119,7 +126,6 @@ fn main() {
                     WebviewUrl::CustomProtocol(gc_url),
                 )
                 .title("Github Control")
-                .inner_size(w, h)
                 .min_inner_size(980.0, 620.0)
                 // 窗口立即显示（保证"点了就有"的即时反馈），底色取应用主题的
                 // 暖白 #f4f2ea，内容就绪前的瞬间是主题色而非白屏
@@ -133,8 +139,17 @@ fn main() {
                         }
                     }
                 });
-                if let (Some(x), Some(y)) = (x, y) {
-                    wb = wb.position(x, y);
+                match geo {
+                    // 构建参数只有逻辑坐标：先按当前主屏缩放比近似换算减少可见跳动，
+                    // 窗口建好后再用物理坐标精确校正（见下方 set_size/set_position）
+                    Some((x, y, w, h)) => {
+                        wb = wb
+                            .inner_size(w as f64 / scale, h as f64 / scale)
+                            .position(x as f64 / scale, y as f64 / scale);
+                    }
+                    None => {
+                        wb = wb.inner_size(1280.0, 820.0);
+                    }
                 }
                 let window = match wb.build() {
                     Ok(w) => w,
@@ -143,6 +158,14 @@ fn main() {
                         std::process::exit(1);
                     }
                 };
+                if let Some((x, y, w, h)) = geo {
+                    use tauri::{PhysicalPosition, PhysicalSize};
+                    let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
+                    let _ = window.set_position(PhysicalPosition::new(x, y));
+                }
+                if maximized {
+                    let _ = window.maximize();
+                }
 
                 // 关闭 WebView2 通用自动填充：它会把提交摘要、仓库地址等输入
                 // 历史存进 WebView 配置文件，并在输入框下弹"保存的信息"下拉，
@@ -175,12 +198,30 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
-            // headless 模式无窗口，阻止默认的"无窗口即退出"，让服务常驻
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                if std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1") {
-                    api.prevent_exit();
+        .run(|app, event| {
+            match &event {
+                // 拖动/缩放：只更新内存缓存；关窗：写入 config.json。
+                // 全部物理像素采样，恢复时 set_size/set_position 原样设回，不漂移。
+                tauri::RunEvent::WindowEvent { label, event, .. } => match event {
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                        if let Some(w) = app.get_webview_window(label) {
+                            win::track_window(&w);
+                        }
+                    }
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        if let Some(w) = app.get_webview_window(label) {
+                            win::persist_window(&w);
+                        }
+                    }
+                    _ => {}
+                },
+                // headless 模式无窗口，阻止默认的"无窗口即退出"，让服务常驻
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    if std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1") {
+                        api.prevent_exit();
+                    }
                 }
+                _ => {}
             }
         });
 }
