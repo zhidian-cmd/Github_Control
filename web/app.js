@@ -350,7 +350,11 @@ function renderTopbar() {
         confirmText: "创建",
       });
       if (!ok) throw e;
-      create = await askCreateRemote(baseName);
+      // 预填优先用原远程的仓库名（从 origin 地址里取），重建后名字不变；
+      // 取不到再退回目录名（safeRepoName 对纯中文名也有兜底）
+      const rec = STATE.repos.find((r) => r.path === repo());
+      const oldName = String(rec?.remote || "").replace(/^.*github\.com\//, "").split("/").pop();
+      create = await askCreateRemote(oldName || baseName);
       if (!create) throw e;
       d = await api("/api/git/push", { method: "POST", body: { repo: repo(), create } });
     }
@@ -371,11 +375,16 @@ function renderTopbar() {
   $("#btn-settings").onclick = () => showView("#settings");
 }
 
-/** 目录名/任意字符串 → GitHub 合法仓库名（非法字符替换为 -，首尾 -._ 去掉） */
+/** 目录名/任意字符串 → GitHub 合法仓库名（非法字符替换为 -，首尾 -._ 去掉）。
+ *  纯中文等净化后为空的名字：用 repo-<8位稳定散列> 兜底——同一个目录
+ *  每次给出的建议名相同（对同名探测/反复推送都稳定），弹窗里仍可随意改。 */
 function safeRepoName(s) {
-  return String(s || "")
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^[-._]+|[-._]+$/g, "");
+  const src = String(s || "");
+  const t = src.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-._]+|[-._]+$/g, "");
+  if (t) return t.slice(0, 80);
+  let h = 0;
+  for (let i = 0; i < src.length; i++) h = (Math.imul(h, 31) + src.charCodeAt(i)) >>> 0;
+  return "repo-" + h.toString(16).padStart(8, "0");
 }
 
 /** 推送时创建远程仓库的弹窗 → Promise<{name, private} | null> */
@@ -1742,7 +1751,13 @@ function openNewRepoWizard() {
   $("#generic-ok").textContent = "创建";
   openDialog("#generic-overlay");
 
-  $("#nr-browse").onclick = () => pickFolder($("#nr-path"));
+  $("#nr-browse").onclick = () => pickFolder($("#nr-path")).then(() => {
+    // 选完目录自动预填净化后的仓库名（纯中文名也有 repo-xxx 兜底）
+    if (!$("#nr-name").value.trim()) {
+      const dir = $("#nr-path").value.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+      $("#nr-name").value = safeRepoName(dir);
+    }
+  });
   $("#nr-remote").onchange = (e) => {
     $("#nr-remote-fields").style.display = e.target.checked ? "" : "none";
   };
@@ -1751,7 +1766,8 @@ function openNewRepoWizard() {
     const path = $("#nr-path").value.trim();
     if (!path) { toast("请选择本地目录", "error"); return; }
     const createRemote = $("#nr-remote").checked;
-    const name = $("#nr-name").value.trim() || path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    // 兜底净化：手动输入中文名/留空都不会把非法名传给后端
+    const name = safeRepoName($("#nr-name").value.trim() || path.replace(/[\\/]+$/, "").split(/[\\/]/).pop());
     const body = {
       path, name, create_remote: createRemote,
       private: document.querySelector("input[name=nr-vis]:checked")?.value === "private",

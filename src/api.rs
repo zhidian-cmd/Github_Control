@@ -798,7 +798,14 @@ async fn attach_origin_and_push(repo: &str, branch: &str, login: &str, name: &st
 
 async fn git_push(Json(d): Json<Value>) -> Response {
     let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let create = d.get("create").cloned();
+    // 注意 serde_json 的坑：前端传 "create": null 时 get 返回 Some(Value::Null)
+    // （键存在！），直接 cloned 会让 is_some() 误判为"创建模式"，随后从
+    // Null 里取 name 得空串 → 弹"仓库名只能用英文"这种风马牛不相及的错误。
+    // 必须把 JSON null 归一化成 None。
+    let create = match d.get("create") {
+        Some(Value::Null) | None => None,
+        Some(v) => Some(v.clone()),
+    };
     let branch = match d
         .get("branch")
         .and_then(|v| v.as_str())
@@ -1524,6 +1531,10 @@ async fn repo_init_and_publish(Json(d): Json<Value>) -> Response {
         return ok(json!({"ok": false, "error": "目录不存在"}));
     }
     if create_remote {
+        let re = regex::Regex::new(r"^[A-Za-z0-9._-]+$").unwrap();
+        if !re.is_match(&name) {
+            return ok(json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}));
+        }
         if let Some(err) = net::proxy_preflight() {
             return ok(json!({"ok": false, "error": err}));
         }
