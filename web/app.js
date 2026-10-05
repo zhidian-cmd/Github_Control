@@ -1805,10 +1805,7 @@ function viewSettings(main) {
         </div>
         <div class="setting-block">
           <h3>代理与兜底</h3>
-          <p class="help">填了代理地址 = 联网优先走代理，网络失败自动转直连；不填 = 纯直连。改完保存后下次调用即生效</p>
-          <label class="check" style="margin-bottom:12px">
-            <input type="checkbox" id="proxy-fallback"> 自动兜底（联网失败时自动换另一条链路重试）
-          </label>
+          <p class="help">填了代理地址 = 联网优先走代理，网络失败自动转直连（兜底内置恒开）；留空 = 纯直连。改完保存后下次调用即生效</p>
           <div class="field"><label>代理地址（留空 = 纯直连）</label><input class="input" id="proxy-url" placeholder="http://127.0.0.1:31181"></div>
           <div class="btn-row">
             <button class="btn btn-primary" id="save-proxy">保存</button>
@@ -1859,7 +1856,6 @@ function viewSettings(main) {
 function bindSettings() {
   $("#btn-back").onclick = () => showView(repo() ? "#changes" : "#welcome");
   api("/api/config").then(({ config }) => {
-    $("#proxy-fallback").checked = config.proxy.fallback !== false;
     $("#proxy-url").value = config.proxy.url;
     $("#git-timeout").value = config.git.cmd_timeout;
     $("#editor-path").value = config.editor || "";
@@ -1869,7 +1865,6 @@ function bindSettings() {
 
   const proxyBody = () => ({
     proxy: {
-      fallback: $("#proxy-fallback").checked,
       url: $("#proxy-url").value.trim(),
     },
   });

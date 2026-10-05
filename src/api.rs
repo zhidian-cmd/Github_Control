@@ -1776,40 +1776,34 @@ fn spawn_clone_worker(
         };
         let (mut rc, mut all_out) = clone_exec(&args, &env_map, timeout_secs, &mut f).await;
 
-        // 自动兜底：网络类失败时换链路（直连↔代理）重试一次
+        // 自动兜底：网络类失败时换链路（代理→直连）重试一次（恒开，诊断走测试按钮）
         if rc != 0 && net::is_net_hint(&all_out) {
-            let cfg = config::load_config(false);
-            let fb_on = cfg
-                .pointer("/proxy/fallback")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            if fb_on {
-                let primary_proxy =
-                    env_map.contains_key("HTTPS_PROXY") || env_map.contains_key("https_proxy");
-                let other = if primary_proxy {
-                    Some(env::build_env_direct())
+            let primary_proxy =
+                env_map.contains_key("HTTPS_PROXY") || env_map.contains_key("https_proxy");
+            let other = if primary_proxy {
+                Some(env::build_env_direct())
+            } else {
+                let u = crate::net::normalize_proxy_url(
+                    config::load_config(false)
+                        .pointer("/proxy/url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                );
+                if u.is_empty() {
+                    None
                 } else {
-                    let u = crate::net::normalize_proxy_url(
-                        cfg.pointer("/proxy/url")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(""),
-                    );
-                    if u.is_empty() {
-                        None
-                    } else {
-                        Some(env::build_env_forced_proxy(&u))
-                    }
-                };
-                if let Some(oenv) = other {
-                    let via = if primary_proxy { "直连" } else { "代理" };
-                    let _ = writeln!(f, "[自动兜底] 主链路网络失败，自动改走{via}重试…");
-                    let _ = f.flush();
-                    let (rc2, out2) = clone_exec(&args, &oenv, timeout_secs, &mut f).await;
-                    if rc2 == 0 {
-                        let _ = writeln!(f, "[自动兜底] 已改走{via}重试成功");
-                        rc = rc2;
-                        all_out = format!("[自动兜底] 主链路网络失败，已自动改走{via}重试成功。\n{out2}");
-                    }
+                    Some(env::build_env_forced_proxy(&u))
+                }
+            };
+            if let Some(oenv) = other {
+                let via = if primary_proxy { "直连" } else { "代理" };
+                let _ = writeln!(f, "[自动兜底] 主链路网络失败，自动改走{via}重试…");
+                let _ = f.flush();
+                let (rc2, out2) = clone_exec(&args, &oenv, timeout_secs, &mut f).await;
+                if rc2 == 0 {
+                    let _ = writeln!(f, "[自动兜底] 已改走{via}重试成功");
+                    rc = rc2;
+                    all_out = format!("[自动兜底] 主链路网络失败，已自动改走{via}重试成功。\n{out2}");
                 }
             }
         }

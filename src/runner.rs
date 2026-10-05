@@ -152,15 +152,9 @@ pub async fn run_gh_nb(args: &[String], timeout: Option<f64>) -> (i32, String) {
     run(&cmd, timeout, None, None).await
 }
 
-/// 兜底配置读取：proxy.fallback，缺省开启
-fn fallback_enabled(cfg: &serde_json::Value) -> bool {
-    cfg.pointer("/proxy/fallback")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true)
-}
-
 /// 自动兜底执行：填了代理地址 → 主路径为代理，网络类失败自动改走直连重试一次；
 /// 没填代理 → 纯直连，无从兜底。成功时输出头部注明实际走的链路。
+/// 兜底恒开：链路诊断交给「测试代理」「测试直连」按钮（它们不兜底）。
 pub async fn run_fb(
     cmd: &[String],
     timeout: Option<f64>,
@@ -170,15 +164,12 @@ pub async fn run_fb(
     if rc == 0 {
         return (rc, out);
     }
-    let cfg = config::load_config(false);
-    if !fallback_enabled(&cfg) {
-        return (rc, out);
-    }
     if !net::is_net_hint(&out) {
         return (rc, out);
     }
     let url = net::normalize_proxy_url(
-        cfg.pointer("/proxy/url")
+        config::load_config(false)
+            .pointer("/proxy/url")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
