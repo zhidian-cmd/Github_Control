@@ -1871,8 +1871,8 @@ function bindSettings() {
     await api("/api/config", { method: "POST", body: {
       proxy: { enabled: $("#proxy-enabled").checked, url: $("#proxy-url").value.trim() } } });
     const d = await api("/api/config/proxy_test", { method: "POST" });
-    if (d.ok && d.gh_ok) toast("代理可用，gh 联网正常", "success");
-    else toast(d.error || "代理不可用", "error");
+    if (d.ok && d.gh_ok) toast(d.note || "连接正常", "success");
+    else toast(d.error || "测试失败", "error");
   });
   $("#save-editor").onclick = (e) => runBtn(e.target, async () => {
     await api("/api/config", { method: "POST", body: { editor: $("#editor-path").value.trim() } });

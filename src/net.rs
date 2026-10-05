@@ -32,6 +32,23 @@ pub fn is_proxy_reachable(proxy_url: &str, timeout: f64) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_secs_f64(timeout)).is_ok()
 }
 
+/// 直连体检：不走任何代理，TCP 直摸 api.github.com:443。
+/// 回答"这台机器不挂代理到底能不能连 GitHub"——被墙环境下直连 TCP 会超时。
+/// 返回 true=直连可达（可酌情关代理）；false=直连不通（需要代理）。
+/// 注意：仅 TCP 层结论；直连能通不代表 gh 认证请求一定不被干扰，但足够做开关代理的参考。
+pub fn direct_github_reachable(timeout: f64) -> bool {
+    let addrs = match ("api.github.com", 443).to_socket_addrs() {
+        Ok(it) => it.collect::<Vec<_>>(),
+        Err(_) => return false,
+    };
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, Duration::from_secs_f64(timeout)).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 /// 联网操作前检查代理。返回错误消息，None 表示可用。
 pub fn proxy_preflight() -> Option<String> {
     let cfg = crate::config::load_config(false);
