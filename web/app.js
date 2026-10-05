@@ -1880,7 +1880,7 @@ function bindSettings() {
   });
   $("#test-direct").onclick = (e) => runBtn(e.target, async () => {
     const d = await api("/api/config/direct_test", { method: "POST" });
-    if (d.ok && d.direct_ok && !d.error) toast(d.note || "直连可用，无需代理", "success");
+    if (d.ok && d.direct_ok && !d.error) toast(d.note || "GitHub 直连正常", "success");
     else toast(d.error || "直连不可用", "error");
   });
   $("#save-editor").onclick = (e) => runBtn(e.target, async () => {

@@ -470,7 +470,7 @@ async fn config_proxy_test() -> Response {
     if !reachable {
         let mut error = format!("代理 {url} 无法连接（端口没开或地址不对）");
         if !direct_ok {
-            error.push_str("；本机直连也不通，启用代理是唯一选择，请检查代理软件是否在运行");
+            error.push_str("；本机直连同样不通");
         }
         return ok(json!({"ok": false, "error": error, "direct_ok": direct_ok}));
     }
@@ -486,9 +486,9 @@ async fn config_proxy_test() -> Response {
     .await;
     if rc == 0 {
         let note = if direct_ok {
-            "代理可用，gh 联网正常（直连此刻也可用）".to_string()
+            "代理可用，gh 联网正常（直连此刻也通）".to_string()
         } else {
-            "代理可用，gh 联网正常（直连不可用——不开代理时联网操作会失败，建议启用代理）".to_string()
+            "代理可用，gh 联网正常（直连此刻不通）".to_string()
         };
         ok(json!({"ok": true, "gh_ok": true, "direct_ok": direct_ok, "note": note}))
     } else {
@@ -499,7 +499,7 @@ async fn config_proxy_test() -> Response {
         };
         let mut error = format!("代理端口可达，但 gh 联网失败：{err}{hint}");
         if !direct_ok {
-            error.push_str("\n（本机直连也不通，问题多半出在代理节点本身，请换节点）");
+            error.push_str("\n（本机直连同样不通）");
         }
         ok(json!({"ok": true, "gh_ok": false, "direct_ok": direct_ok, "error": error}))
     }
@@ -513,7 +513,7 @@ async fn config_direct_test() -> Response {
         .unwrap_or(false);
     if !direct_ok {
         return ok(json!({"ok": true, "direct_ok": false,
-            "error": "直连不通（TCP 连不上 api.github.com：超时或被拦）。这台网络需要走代理。"}));
+            "error": "GitHub 直连不通（TCP 连不上 api.github.com，超时或被拦）"}));
     }
     let gh = paths::gh_exe().to_string_lossy().into_owned();
     let env_map = env::build_env_direct();
@@ -525,7 +525,7 @@ async fn config_direct_test() -> Response {
     )
     .await;
     if rc == 0 {
-        return ok(json!({"ok": true, "direct_ok": true, "note": "直连可用，无需代理"}));
+        return ok(json!({"ok": true, "direct_ok": true, "note": "GitHub 直连正常"}));
     }
     let err: String = out.chars().take(300).collect();
     let hint = match crate::messages::matched_hint(&out) {
@@ -533,7 +533,7 @@ async fn config_direct_test() -> Response {
         None => String::new(),
     };
     ok(json!({"ok": true, "direct_ok": true,
-        "error": format!("直连 TCP 能通，但 gh 直连认证失败：{err}{hint}")}))
+        "error": format!("GitHub 直连能通，但请求失败：{err}{hint}")}))
 }
 
 // ---------------- /api/gh/* ----------------
