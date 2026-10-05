@@ -450,8 +450,12 @@ async fn config_versions() -> Response {
 
 async fn config_proxy_test() -> Response {
     let cfg = config::load_config(false);
-    let enabled = cfg["proxy"]["enabled"].as_bool().unwrap_or(false);
-    let url = cfg["proxy"]["url"].as_str().unwrap_or("").to_string();
+    let url = net::normalize_proxy_url(
+        cfg["proxy"]["url"].as_str().unwrap_or(""),
+    );
+    if url.is_empty() {
+        return ok(json!({"ok": false, "error": "请先填写代理地址"}));
+    }
 
     // 直连体检（与代理设置无关）：3 秒内 TCP 能否直摸 api.github.com:443。
     // 放 spawn_blocking，避免 DNS/连接阻塞异步运行时。
@@ -459,38 +463,32 @@ async fn config_proxy_test() -> Response {
         .await
         .unwrap_or(false);
 
-    // 未启用代理：只做直连体检 + gh 直连联网验证
-    if !enabled {
-        if !direct_ok {
-            return ok(json!({"ok": true, "gh_ok": false, "direct_ok": false,
-                "error": "当前未启用代理，且本机网络直连不了 GitHub（TCP 超时，典型的被墙环境）。请启用并填好代理后再测。"}));
-        }
-        let (rc, out) = runner::run_gh_nb(&["auth".into(), "status".into()], Some(20.0)).await;
-        if rc == 0 {
-            return ok(json!({"ok": true, "gh_ok": true, "direct_ok": true,
-                "note": "直连可用，无需代理"}));
-        }
-        let err: String = out.chars().take(300).collect();
-        let hint = match crate::messages::matched_hint(&out) {
-            Some(h) => format!("。提示：{h}"),
-            None => String::new(),
-        };
-        return ok(json!({"ok": true, "gh_ok": false, "direct_ok": true,
-            "error": format!("直连能通，但 gh 联网失败：{err}{hint}")}));
-    }
-
-    // 代理模式：先测端口，再测 gh 经代理联网
+    // 无论"启用代理"开关状态，都强制测这条代理链路 —— 开关管的是日常操作走哪条路，
+    // 测试按钮只负责回答"这条链路现在通不通"。
     let timeout = cfg["proxy"]["test_timeout"].as_f64().unwrap_or(2.0);
     let reachable = net::is_proxy_reachable(&url, timeout);
     if !reachable {
-        return ok(json!({"ok": false, "error": format!("代理 {url} 无法连接"), "direct_ok": direct_ok}));
+        let mut error = format!("代理 {url} 无法连接（端口没开或地址不对）");
+        if !direct_ok {
+            error.push_str("；本机直连也不通，启用代理是唯一选择，请检查代理软件是否在运行");
+        }
+        return ok(json!({"ok": false, "error": error, "direct_ok": direct_ok}));
     }
-    let (rc, out) = runner::run_gh_nb(&["auth".into(), "status".into()], Some(20.0)).await;
+    // 用强制代理环境测 gh，测的就是这条链路本身
+    let gh = paths::gh_exe().to_string_lossy().into_owned();
+    let env_map = env::build_env_forced_proxy(&url);
+    let (rc, out) = runner::run(
+        &[gh, "auth".into(), "status".into()],
+        Some(20.0),
+        None,
+        Some(&env_map),
+    )
+    .await;
     if rc == 0 {
         let note = if direct_ok {
-            "代理可用，gh 联网正常（直连也可用，可酌情关闭代理）".to_string()
+            "代理可用，gh 联网正常（直连此刻也可用）".to_string()
         } else {
-            "代理可用，gh 联网正常（直连不可用，请保持代理开启）".to_string()
+            "代理可用，gh 联网正常（直连不可用——不开代理时联网操作会失败，建议启用代理）".to_string()
         };
         ok(json!({"ok": true, "gh_ok": true, "direct_ok": direct_ok, "note": note}))
     } else {
