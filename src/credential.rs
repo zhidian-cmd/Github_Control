@@ -54,13 +54,7 @@ pub async fn get_auth_state(force: bool) -> String {
         c.1 = now + 1800.0;
         return "not_logged_in".into();
     }
-    let (rc, out) = runner::run(
-        &[paths::gh_exe().to_string_lossy().into_owned(), "auth".into(), "status".into()],
-        Some(15.0),
-        None,
-        None,
-    )
-    .await;
+    let (rc, out) = runner::run_gh(&["auth".into(), "status".into()], Some(15.0)).await;
     let (state, ttl): (String, f64) = if rc == 0 {
         ("logged_in".into(), 1800.0)
     } else {

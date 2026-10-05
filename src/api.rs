@@ -465,7 +465,7 @@ async fn config_proxy_test() -> Response {
             return ok(json!({"ok": true, "gh_ok": false, "direct_ok": false,
                 "error": "当前未启用代理，且本机网络直连不了 GitHub（TCP 超时，典型的被墙环境）。请启用并填好代理后再测。"}));
         }
-        let (rc, out) = runner::run_gh(&["auth".into(), "status".into()], Some(20.0)).await;
+        let (rc, out) = runner::run_gh_nb(&["auth".into(), "status".into()], Some(20.0)).await;
         if rc == 0 {
             return ok(json!({"ok": true, "gh_ok": true, "direct_ok": true,
                 "note": "直连可用，无需代理"}));
@@ -485,7 +485,7 @@ async fn config_proxy_test() -> Response {
     if !reachable {
         return ok(json!({"ok": false, "error": format!("代理 {url} 无法连接"), "direct_ok": direct_ok}));
     }
-    let (rc, out) = runner::run_gh(&["auth".into(), "status".into()], Some(20.0)).await;
+    let (rc, out) = runner::run_gh_nb(&["auth".into(), "status".into()], Some(20.0)).await;
     if rc == 0 {
         let note = if direct_ok {
             "代理可用，gh 联网正常（直连也可用，可酌情关闭代理）".to_string()
@@ -505,6 +505,37 @@ async fn config_proxy_test() -> Response {
         }
         ok(json!({"ok": true, "gh_ok": false, "direct_ok": direct_ok, "error": error}))
     }
+}
+
+/// 直连测试（与代理配置完全无关）：TCP 直摸 + gh 直连认证，两关都过才算通。
+/// 专门给"直连测试"按钮用，不做任何兜底，测哪条报哪条。
+async fn config_direct_test() -> Response {
+    let direct_ok = tokio::task::spawn_blocking(|| net::direct_github_reachable(4.0))
+        .await
+        .unwrap_or(false);
+    if !direct_ok {
+        return ok(json!({"ok": true, "direct_ok": false,
+            "error": "直连不通（TCP 连不上 api.github.com：超时或被拦）。这台网络需要走代理。"}));
+    }
+    let gh = paths::gh_exe().to_string_lossy().into_owned();
+    let env_map = env::build_env_direct();
+    let (rc, out) = runner::run(
+        &[gh, "auth".into(), "status".into()],
+        Some(20.0),
+        None,
+        Some(&env_map),
+    )
+    .await;
+    if rc == 0 {
+        return ok(json!({"ok": true, "direct_ok": true, "note": "直连可用，无需代理"}));
+    }
+    let err: String = out.chars().take(300).collect();
+    let hint = match crate::messages::matched_hint(&out) {
+        Some(h) => format!("。提示：{h}"),
+        None => String::new(),
+    };
+    ok(json!({"ok": true, "direct_ok": true,
+        "error": format!("直连 TCP 能通，但 gh 直连认证失败：{err}{hint}")}))
 }
 
 // ---------------- /api/gh/* ----------------
@@ -1660,6 +1691,63 @@ fn normalize_clone_url(u: &str) -> String {
 }
 
 /// 克隆 worker：流式写 stderr 到日志、超时 kill、成功后登记仓库并补建跟踪分支
+/// 执行一次 clone 并把 stderr 流式写入日志；返回 (rc, 全部输出)。
+/// 供 clone worker 主路径与自动兜底重试共用。
+async fn clone_exec(
+    args: &[String],
+    env_map: &HashMap<String, String>,
+    timeout_secs: f64,
+    log: &mut std::fs::File,
+) -> (i32, String) {
+    use std::io::Write;
+    let git = paths::git_exe().to_string_lossy().into_owned();
+    let mut cmd = tokio::process::Command::new(&git);
+    cmd.args(args)
+        .envs(env_map)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return (-1, e.to_string()),
+    };
+    let stderr = child.stderr.take().unwrap();
+    use tokio::io::AsyncBufReadExt;
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    // 失败时要从全部输出里提取中文提示（错误行可能在任意位置）
+    let mut all_out = String::new();
+    let start = std::time::Instant::now();
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(l)) => {
+                        let _ = writeln!(log, "{l}");
+                        let _ = log.flush();
+                        all_out.push_str(&l);
+                        all_out.push('\n');
+                    }
+                    _ => break,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                if start.elapsed().as_secs_f64() > timeout_secs {
+                    let _ = child.kill().await;
+                    let _ = writeln!(log, "超时（{timeout_secs} 秒）");
+                    break;
+                }
+            }
+        }
+    }
+    let status = child.wait().await;
+    let rc = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+    (rc, all_out)
+}
+
 fn spawn_clone_worker(
     clone_id: String,
     args: Vec<String>,
@@ -1688,54 +1776,46 @@ fn spawn_clone_worker(
             Ok(f) => f,
             Err(_) => return,
         };
-        let git = paths::git_exe().to_string_lossy().into_owned();
-        let mut cmd = tokio::process::Command::new(&git);
-        cmd.args(&args)
-            .envs(&env_map)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = writeln!(f, "EXIT:-1\nREPO:{}", e);
-                return;
-            }
-        };
-        let stderr = child.stderr.take().unwrap();
-        use tokio::io::AsyncBufReadExt;
-        let mut lines = tokio::io::BufReader::new(stderr).lines();
-        // 失败时要从全部输出里提取中文提示（错误行可能在任意位置）
-        let mut all_out = String::new();
-        let start = std::time::Instant::now();
-        loop {
-            tokio::select! {
-                line = lines.next_line() => {
-                    match line {
-                        Ok(Some(l)) => {
-                            let _ = writeln!(f, "{l}");
-                            let _ = f.flush();
-                            all_out.push_str(&l);
-                            all_out.push('\n');
-                        }
-                        _ => break,
+        let (mut rc, mut all_out) = clone_exec(&args, &env_map, timeout_secs, &mut f).await;
+
+        // 自动兜底：网络类失败时换链路（直连↔代理）重试一次
+        if rc != 0 && net::is_net_hint(&all_out) {
+            let cfg = config::load_config(false);
+            let fb_on = cfg
+                .pointer("/proxy/fallback")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            if fb_on {
+                let primary_proxy =
+                    env_map.contains_key("HTTPS_PROXY") || env_map.contains_key("https_proxy");
+                let other = if primary_proxy {
+                    Some(env::build_env_direct())
+                } else {
+                    let u = crate::net::normalize_proxy_url(
+                        cfg.pointer("/proxy/url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    );
+                    if u.is_empty() {
+                        None
+                    } else {
+                        Some(env::build_env_forced_proxy(&u))
                     }
-                }
-                _ = tokio::time::sleep(Duration::from_millis(500)) => {
-                    if start.elapsed().as_secs_f64() > timeout_secs {
-                        let _ = child.kill().await;
-                        let _ = writeln!(f, "超时（{timeout_secs} 秒）");
-                        break;
+                };
+                if let Some(oenv) = other {
+                    let via = if primary_proxy { "直连" } else { "代理" };
+                    let _ = writeln!(f, "[自动兜底] 主链路网络失败，自动改走{via}重试…");
+                    let _ = f.flush();
+                    let (rc2, out2) = clone_exec(&args, &oenv, timeout_secs, &mut f).await;
+                    if rc2 == 0 {
+                        let _ = writeln!(f, "[自动兜底] 已改走{via}重试成功");
+                        rc = rc2;
+                        all_out = format!("[自动兜底] 主链路网络失败，已自动改走{via}重试成功。\n{out2}");
                     }
                 }
             }
         }
-        let status = child.wait().await;
-        let rc = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+
         if rc == 0 {
             repositories::add_repo(&target_path, None, "");
             // clone 只给默认分支建了本地分支，其余远程头补建跟踪分支
@@ -1904,6 +1984,7 @@ pub fn build_router() -> Router {
         .route("/api/config", get(config_get).post(config_set))
         .route("/api/config/versions", get(config_versions))
         .route("/api/config/proxy_test", post(config_proxy_test))
+        .route("/api/config/direct_test", post(config_direct_test))
         .route("/api/gh/release", post(gh_release))
         .route("/api/gh/release_delete", post(gh_release_delete))
         .route("/api/gh/releases", get(gh_releases))

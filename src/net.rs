@@ -77,7 +77,7 @@ pub fn proxy_preflight() -> Option<String> {
 }
 
 /// 网络抖动/间歇性故障关键词：命中才重试（git pull/push 重试与 gh 直连重试共用）
-pub const NET_HINTS: [&str; 22] = [
+pub const NET_HINTS: [&str; 23] = [
     "could not resolve host",
     "network is unreachable",
     "rpc failed",
@@ -101,6 +101,8 @@ pub const NET_HINTS: [&str; 22] = [
     "curl 56",
     "curl 35",
     "curl 28",
+    // runner 层超时是中文文案，同样值得兜底/重试
+    "命令超时",
 ];
 
 pub fn is_net_hint(out: &str) -> bool {

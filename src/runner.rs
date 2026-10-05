@@ -4,6 +4,7 @@
 use crate::config;
 use crate::env;
 use crate::messages;
+use crate::net;
 use crate::paths;
 use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -134,13 +135,89 @@ pub async fn run_git(args: &[String], repo: Option<&str>, timeout: Option<f64>) 
         cmd.push(r.to_string());
     }
     cmd.extend(args.iter().cloned());
-    run(&cmd, timeout, None, None).await
+    run_fb(&cmd, timeout, None).await
 }
 
 pub async fn run_gh(args: &[String], timeout: Option<f64>) -> (i32, String) {
     let mut cmd = vec![paths::gh_exe().to_string_lossy().into_owned()];
     cmd.extend(args.iter().cloned());
+    run_fb(&cmd, timeout, None).await
+}
+
+/// 不带兜底的 gh 执行：给"专门测某一条链路"的场景用（代理测试/直连测试），
+/// 否则测试会把兜底重试的结果混进去，失去检测意义。
+pub async fn run_gh_nb(args: &[String], timeout: Option<f64>) -> (i32, String) {
+    let mut cmd = vec![paths::gh_exe().to_string_lossy().into_owned()];
+    cmd.extend(args.iter().cloned());
     run(&cmd, timeout, None, None).await
+}
+
+/// 兜底配置读取：proxy.fallback，缺省开启
+fn fallback_enabled(cfg: &serde_json::Value) -> bool {
+    cfg.pointer("/proxy/fallback")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// 自动兜底执行：先按当前配置走主路径（开=代理，关=直连）；
+/// 若失败且输出像网络类错误（net::is_net_hint），自动换另一条链路重试一次。
+/// - 兜底成功：返回成功结果，输出头部注明实际走的链路
+/// - 双双失败：直连为主时合并两路错误；代理为主时保留代理错误（用户配置的链路，报错更对症）
+pub async fn run_fb(
+    cmd: &[String],
+    timeout: Option<f64>,
+    input: Option<String>,
+) -> (i32, String) {
+    let (rc, out) = run(cmd, timeout, input.clone(), None).await;
+    if rc == 0 {
+        return (rc, out);
+    }
+    let cfg = config::load_config(false);
+    if !fallback_enabled(&cfg) {
+        return (rc, out);
+    }
+    if !net::is_net_hint(&out) {
+        return (rc, out);
+    }
+    let enabled = cfg
+        .pointer("/proxy/enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let url = net::normalize_proxy_url(
+        cfg.pointer("/proxy/url")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
+    let (primary, via, env_map) = if enabled {
+        ("代理", "直连", env::build_env_direct())
+    } else if !url.is_empty() {
+        ("直连", "代理", env::build_env_forced_proxy(&url))
+    } else {
+        // 直连失败且没配代理地址，无从兜底
+        return (rc, out);
+    };
+    let (rc2, out2) = run(cmd, timeout, input, Some(&env_map)).await;
+    if rc2 == 0 {
+        (rc2, format!("[自动兜底] 主链路（{primary}）网络失败，已自动改走{via}重试成功。\n\n{out2}"))
+    } else if enabled {
+        (rc, format!("{out}\n\n（已自动尝试直连，同样失败）"))
+    } else {
+        (
+            rc2,
+            format!("直连与代理均已尝试，仍然失败。\n\n【直连】{out}\n\n【代理】{out2}"),
+        )
+    }
+}
+
+/// 兜底版 git：本地命令不含网络关键词时行为与 run_git 完全一致
+pub async fn run_git_fb(args: &[String], repo: Option<&str>, timeout: Option<f64>) -> (i32, String) {
+    let mut cmd = vec![paths::git_exe().to_string_lossy().into_owned()];
+    if let Some(r) = repo {
+        cmd.push("-C".into());
+        cmd.push(r.to_string());
+    }
+    cmd.extend(args.iter().cloned());
+    run_fb(&cmd, timeout, None).await
 }
 
 /// 写操作日志 run.log，超过 1MB 轮转为 run.old.log

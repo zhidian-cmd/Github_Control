@@ -1806,10 +1806,14 @@ function viewSettings(main) {
           <label class="check" style="margin-bottom:12px">
             <input type="checkbox" id="proxy-enabled"> 启用代理
           </label>
+          <label class="check" style="margin-bottom:12px">
+            <input type="checkbox" id="proxy-fallback"> 自动兜底（联网失败时自动换另一条链路重试）
+          </label>
           <div class="field"><label>代理地址</label><input class="input" id="proxy-url" placeholder="http://127.0.0.1:31181"></div>
           <div class="btn-row">
             <button class="btn btn-primary" id="save-proxy">保存</button>
-            <button class="btn" id="test-proxy">测试连接</button>
+            <button class="btn" id="test-proxy">测试代理</button>
+            <button class="btn" id="test-direct">测试直连</button>
           </div>
         </div>
         <div class="setting-block">
@@ -1855,6 +1859,7 @@ function viewSettings(main) {
 function bindSettings() {
   api("/api/config").then(({ config }) => {
     $("#proxy-enabled").checked = config.proxy.enabled;
+    $("#proxy-fallback").checked = config.proxy.fallback !== false;
     $("#proxy-url").value = config.proxy.url;
     $("#git-timeout").value = config.git.cmd_timeout;
     $("#editor-path").value = config.editor || "";
@@ -1862,17 +1867,27 @@ function bindSettings() {
 
   renderAccountBlock();
 
+  const proxyBody = () => ({
+    proxy: {
+      enabled: $("#proxy-enabled").checked,
+      fallback: $("#proxy-fallback").checked,
+      url: $("#proxy-url").value.trim(),
+    },
+  });
   $("#save-proxy").onclick = (e) => runBtn(e.target, async () => {
-    await api("/api/config", { method: "POST", body: {
-      proxy: { enabled: $("#proxy-enabled").checked, url: $("#proxy-url").value.trim() } } });
+    await api("/api/config", { method: "POST", body: proxyBody() });
     toast("代理设置已保存", "success");
   });
   $("#test-proxy").onclick = (e) => runBtn(e.target, async () => {
-    await api("/api/config", { method: "POST", body: {
-      proxy: { enabled: $("#proxy-enabled").checked, url: $("#proxy-url").value.trim() } } });
+    await api("/api/config", { method: "POST", body: proxyBody() });
     const d = await api("/api/config/proxy_test", { method: "POST" });
     if (d.ok && d.gh_ok) toast(d.note || "连接正常", "success");
     else toast(d.error || "测试失败", "error");
+  });
+  $("#test-direct").onclick = (e) => runBtn(e.target, async () => {
+    const d = await api("/api/config/direct_test", { method: "POST" });
+    if (d.ok && d.direct_ok && !d.error) toast(d.note || "直连可用，无需代理", "success");
+    else toast(d.error || "直连不可用", "error");
   });
   $("#save-editor").onclick = (e) => runBtn(e.target, async () => {
     await api("/api/config", { method: "POST", body: { editor: $("#editor-path").value.trim() } });

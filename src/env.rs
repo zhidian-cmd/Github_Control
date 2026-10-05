@@ -60,6 +60,33 @@ pub fn build_env() -> HashMap<String, String> {
     env
 }
 
+/// 强制直连环境：清掉继承来的代理变量，也不注入配置代理（自动兜底"改走直连"时用）
+pub fn build_env_direct() -> HashMap<String, String> {
+    let mut env = build_env();
+    for k in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "ALL_PROXY",
+    ] {
+        env.remove(k);
+    }
+    env
+}
+
+/// 强制走指定代理的环境（忽略配置开关，自动兜底"改走代理"时用）
+pub fn build_env_forced_proxy(url: &str) -> HashMap<String, String> {
+    let mut env = build_env_direct();
+    let u = crate::net::normalize_proxy_url(url);
+    if !u.is_empty() {
+        env.insert("HTTP_PROXY".into(), u.clone());
+        env.insert("HTTPS_PROXY".into(), u);
+    }
+    env
+}
+
 /// 取 URL 的 host；解析失败返回空串
 fn host_of(url: &str) -> String {
     url::Url::parse(url)
