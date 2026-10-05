@@ -419,6 +419,14 @@ async fn config_get() -> Response {
 }
 
 async fn config_set(Json(d): Json<Value>) -> Response {
+    // 代理地址归一化：用户只填 host:port 时补 http://（探测和子进程环境都依赖 scheme）
+    let mut d = d;
+    if let Some(v) = d.pointer_mut("/proxy/url") {
+        if let Some(s) = v.as_str() {
+            let normalized = net::normalize_proxy_url(s);
+            *v = json!(normalized);
+        }
+    }
     ok(json!({"ok": true, "config": config::update_config(&d)}))
 }
 

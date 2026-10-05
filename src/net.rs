@@ -3,9 +3,20 @@
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+/// 代理地址归一化：用户可能只填 host:port（如 127.0.0.1:7810）。
+/// url::Url::parse 对无 scheme 的输入直接报错（scheme 不能以数字开头），
+/// git/curl 拿到无 scheme 的 HTTP_PROXY 也会失效 —— 统一补 http://。
+pub fn normalize_proxy_url(u: &str) -> String {
+    let t = u.trim();
+    if t.is_empty() || t.contains("://") {
+        return t.to_string();
+    }
+    format!("http://{t}")
+}
+
 /// 检测代理端口能否建立 TCP 连接
 pub fn is_proxy_reachable(proxy_url: &str, timeout: f64) -> bool {
-    let parsed = match url::Url::parse(proxy_url) {
+    let parsed = match url::Url::parse(&normalize_proxy_url(proxy_url)) {
         Ok(u) => u,
         Err(_) => return false,
     };
@@ -31,11 +42,11 @@ pub fn proxy_preflight() -> Option<String> {
     if !enabled {
         return None;
     }
-    let url = cfg
-        .pointer("/proxy/url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let url = normalize_proxy_url(
+        cfg.pointer("/proxy/url")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
     let timeout = cfg
         .pointer("/proxy/test_timeout")
         .and_then(|v| v.as_f64())
