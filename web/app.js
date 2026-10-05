@@ -1792,7 +1792,10 @@ function openNewRepoWizard() {
 function viewSettings(main) {
   main.innerHTML = `
     <div class="view">
-      <h1 class="view-title">设置</h1>
+      <div style="display:flex;align-items:center;gap:14px">
+        <h1 class="view-title">设置</h1>
+        <button class="btn btn-sm" id="btn-back">← 返回仓库</button>
+      </div>
       <div class="card">
         <div class="setting-block">
           <h3>账号</h3>
@@ -1801,15 +1804,12 @@ function viewSettings(main) {
           </div>
         </div>
         <div class="setting-block">
-          <h3>代理</h3>
-          <p class="help">联网操作会通过这里配置的代理进行，改完保存后下次调用即生效</p>
-          <label class="check" style="margin-bottom:12px">
-            <input type="checkbox" id="proxy-enabled"> 启用代理
-          </label>
+          <h3>代理与兜底</h3>
+          <p class="help">填了代理地址 = 联网优先走代理，网络失败自动转直连；不填 = 纯直连。改完保存后下次调用即生效</p>
           <label class="check" style="margin-bottom:12px">
             <input type="checkbox" id="proxy-fallback"> 自动兜底（联网失败时自动换另一条链路重试）
           </label>
-          <div class="field"><label>代理地址</label><input class="input" id="proxy-url" placeholder="http://127.0.0.1:31181"></div>
+          <div class="field"><label>代理地址（留空 = 纯直连）</label><input class="input" id="proxy-url" placeholder="http://127.0.0.1:31181"></div>
           <div class="btn-row">
             <button class="btn btn-primary" id="save-proxy">保存</button>
             <button class="btn" id="test-proxy">测试代理</button>
@@ -1857,8 +1857,8 @@ function viewSettings(main) {
 }
 
 function bindSettings() {
+  $("#btn-back").onclick = () => showView(repo() ? "#changes" : "#welcome");
   api("/api/config").then(({ config }) => {
-    $("#proxy-enabled").checked = config.proxy.enabled;
     $("#proxy-fallback").checked = config.proxy.fallback !== false;
     $("#proxy-url").value = config.proxy.url;
     $("#git-timeout").value = config.git.cmd_timeout;
@@ -1869,7 +1869,6 @@ function bindSettings() {
 
   const proxyBody = () => ({
     proxy: {
-      enabled: $("#proxy-enabled").checked,
       fallback: $("#proxy-fallback").checked,
       url: $("#proxy-url").value.trim(),
     },

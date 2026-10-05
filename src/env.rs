@@ -28,20 +28,14 @@ pub fn build_env() -> HashMap<String, String> {
         format!("{}{sep}{path}", git_cmd.to_string_lossy()),
     );
 
-    // 4. 代理（如果启用）——地址归一化：用户可能只填 host:port，无 scheme 的
-    //    代理变量 git/curl 无法使用，统一补 http://（net::normalize_proxy_url）
+    // 4. 代理：只要填了地址，联网就优先走代理（失败由自动兜底转直连）；
+    //    不填 = 纯直连。旧的 enabled 开关已废弃，填地址即启用。
     let cfg = config::load_config(false);
-    if cfg
-        .pointer("/proxy/enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        if let Some(u) = cfg.pointer("/proxy/url").and_then(|v| v.as_str()) {
-            let u = crate::net::normalize_proxy_url(u);
-            if !u.is_empty() {
-                env.insert("HTTP_PROXY".into(), u.clone());
-                env.insert("HTTPS_PROXY".into(), u);
-            }
+    if let Some(u) = cfg.pointer("/proxy/url").and_then(|v| v.as_str()) {
+        let u = crate::net::normalize_proxy_url(u);
+        if !u.is_empty() {
+            env.insert("HTTP_PROXY".into(), u.clone());
+            env.insert("HTTPS_PROXY".into(), u);
         }
     }
 

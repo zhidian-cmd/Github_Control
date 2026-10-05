@@ -159,10 +159,8 @@ fn fallback_enabled(cfg: &serde_json::Value) -> bool {
         .unwrap_or(true)
 }
 
-/// 自动兜底执行：先按当前配置走主路径（开=代理，关=直连）；
-/// 若失败且输出像网络类错误（net::is_net_hint），自动换另一条链路重试一次。
-/// - 兜底成功：返回成功结果，输出头部注明实际走的链路
-/// - 双双失败：直连为主时合并两路错误；代理为主时保留代理错误（用户配置的链路，报错更对症）
+/// 自动兜底执行：填了代理地址 → 主路径为代理，网络类失败自动改走直连重试一次；
+/// 没填代理 → 纯直连，无从兜底。成功时输出头部注明实际走的链路。
 pub async fn run_fb(
     cmd: &[String],
     timeout: Option<f64>,
@@ -179,33 +177,21 @@ pub async fn run_fb(
     if !net::is_net_hint(&out) {
         return (rc, out);
     }
-    let enabled = cfg
-        .pointer("/proxy/enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let url = net::normalize_proxy_url(
         cfg.pointer("/proxy/url")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
-    let (primary, via, env_map) = if enabled {
-        ("代理", "直连", env::build_env_direct())
-    } else if !url.is_empty() {
-        ("直连", "代理", env::build_env_forced_proxy(&url))
-    } else {
-        // 直连失败且没配代理地址，无从兜底
+    if url.is_empty() {
+        // 没配代理：纯直连，无处可兜
         return (rc, out);
-    };
+    }
+    let env_map = env::build_env_direct();
     let (rc2, out2) = run(cmd, timeout, input, Some(&env_map)).await;
     if rc2 == 0 {
-        (rc2, format!("[自动兜底] 主链路（{primary}）网络失败，已自动改走{via}重试成功。\n\n{out2}"))
-    } else if enabled {
-        (rc, format!("{out}\n\n（已自动尝试直连，同样失败）"))
+        (rc2, format!("[自动兜底] 代理网络失败，已自动改走直连重试成功。\n\n{out2}"))
     } else {
-        (
-            rc2,
-            format!("直连与代理均已尝试，仍然失败。\n\n【直连】{out}\n\n【代理】{out2}"),
-        )
+        (rc, format!("{out}\n\n（已自动尝试直连，同样失败）"))
     }
 }
 
