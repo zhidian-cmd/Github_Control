@@ -461,7 +461,11 @@ async fn config_proxy_test() -> Response {
         ok(json!({"ok": true, "gh_ok": true}))
     } else {
         let err: String = out.chars().take(300).collect();
-        ok(json!({"ok": true, "gh_ok": false, "error": format!("代理端口可达，但 gh 联网失败：{err}")}))
+        let hint = match crate::messages::matched_hint(&out) {
+            Some(h) => format!("。提示：{h}"),
+            None => String::new(),
+        };
+        ok(json!({"ok": true, "gh_ok": false, "error": format!("代理端口可达，但 gh 联网失败：{err}{hint}")}))
     }
 }
 
@@ -502,7 +506,10 @@ async fn gh_find_own_repo(Query(q): Query<Q>) -> Response {
     if !re.is_match(&name) {
         return ok(json!({"ok": false, "error": "无效的仓库名"}));
     }
-    if credential::get_auth_state(false).await != "logged_in" {
+    // 仅在确认"真的没登录/token 失效"时拦截；unknown（网络波动）放行，
+    // 让后续真实操作给出更准确的网络错误，而不是误报"未登录"
+    let st = credential::get_auth_state(false).await;
+    if st == "expired" || st == "not_logged_in" {
         return ok(json!({"ok": false, "error": "未登录"}));
     }
     let login = gh_login().await;
@@ -869,7 +876,8 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         if let Some(err) = net::proxy_preflight() {
             return ok(json!({"ok": false, "error": err}));
         }
-        if credential::get_auth_state(false).await != "logged_in" {
+        let st = credential::get_auth_state(false).await;
+        if st == "expired" || st == "not_logged_in" {
             return ok(json!({"ok": false, "error": "创建远程仓库需要先登录 GitHub"}));
         }
         // 先探测账号下是否已有同名仓库：有则直接关联推送，不走创建。

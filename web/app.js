@@ -290,10 +290,16 @@ const STATE = {
 const repo = () => STATE.active;
 
 function applyAuthLocks() {
-  const bad = STATE.auth.state !== "logged_in";
+  const st = STATE.auth.state;
+  const bad = st !== "logged_in";
+  const titleMap = {
+    expired: "登录已过期，请重新登录",
+    unknown: "网络异常，暂时无法验证登录；如操作报网络错误请检查代理",
+    not_logged_in: "请先登录",
+  };
   $$("[data-needs-auth]").forEach((b) => {
     b.disabled = bad || (b.dataset.needsRepo === "1" && !repo());
-    b.title = bad ? (STATE.auth.state === "expired" ? "登录已过期，请重新登录" : "请先登录") : "";
+    b.title = bad ? (titleMap[st] || "请先登录") : "";
   });
 }
 
@@ -438,6 +444,7 @@ function renderAuthChip() {
     logged_in: `已登录 ${STATE.auth.username || ""}`,
     expired: "已过期 · 重新登录",
     not_logged_in: "未登录 · 去登录",
+    unknown: "网络异常 · 无法验证",
     loading: "检查中…",
   }[STATE.auth.state] || "未登录";
   chip.innerHTML = `<span class="dot"></span>${esc(label)}`;
@@ -1929,6 +1936,16 @@ function renderAccountBlock() {
     });
   } else if (STATE.auth.state === "expired") {
     box.innerHTML = `<span class="badge badge-y">登录已过期</span> <a href="#login">重新登录</a>`;
+  } else if (STATE.auth.state === "unknown") {
+    box.innerHTML = `<span class="badge badge-y">网络异常，无法验证登录</span>
+      <button class="btn btn-sm" id="btn-reverify">重试</button>`;
+    $("#btn-reverify").onclick = async (e) => runBtn(e.target, async () => {
+      const v = await api("/api/auth/verify");
+      STATE.auth = { state: v.state, username: v.username || "" };
+      renderAuthChip();
+      applyAuthLocks();
+      renderAccountBlock();
+    });
   } else {
     box.innerHTML = `<span class="badge badge-k">未登录</span> <a href="#login">去登录</a>`;
   }

@@ -189,6 +189,8 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
 .auth-chip.state-expired .dot { background: var(--yellow); }
 .auth-chip.state-not_logged_in { color: var(--red); border-color: var(--red); }
 .auth-chip.state-not_logged_in .dot { background: var(--red); }
+.auth-chip.state-unknown { color: var(--yellow); border-color: var(--yellow); }
+.auth-chip.state-unknown .dot { background: var(--yellow); }
 
 /* ---------- 按钮 ---------- */
 

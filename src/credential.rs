@@ -10,6 +10,7 @@ use std::sync::{Mutex, OnceLock};
 
 fn auth_cache() -> &'static Mutex<(Option<String>, f64)> {
     static C: OnceLock<Mutex<(Option<String>, f64)>> = OnceLock::new();
+    // 第二个字段语义：缓存过期时刻（时间戳），不是写入时刻
     C.get_or_init(|| Mutex::new((None, 0.0)))
 }
 
@@ -29,15 +30,18 @@ pub fn get_auth_state_fast() -> String {
     "not_logged_in".into()
 }
 
-/// 返回: "logged_in" | "expired" | "not_logged_in"。
-/// 30 分钟内复用缓存；force=true 强制联网验证。
+/// 返回: "logged_in" | "expired" | "not_logged_in" | "unknown"。
+/// - logged_in（联网验证通过）：缓存 30 分钟
+/// - expired（GitHub 明确回复 401，token 真失效）：缓存 5 分钟
+/// - unknown（联网验证本身失败：代理抽风/超时/连接中断）：只缓存 60 秒，
+///   避免一次网络波动被误判成"未登录"后卡住半小时；网络恢复后快速自愈
 pub async fn get_auth_state(force: bool) -> String {
     let now = chrono::Local::now().timestamp() as f64;
     {
         let c = auth_cache().lock().unwrap();
         if !force {
             if let Some(state) = &c.0 {
-                if now - c.1 < 1800.0 {
+                if now < c.1 {
                     return state.clone();
                 }
             }
@@ -47,7 +51,7 @@ pub async fn get_auth_state(force: bool) -> String {
     if get_auth_state_fast() == "not_logged_in" {
         let mut c = auth_cache().lock().unwrap();
         c.0 = Some("not_logged_in".into());
-        c.1 = now;
+        c.1 = now + 1800.0;
         return "not_logged_in".into();
     }
     let (rc, out) = runner::run(
@@ -57,26 +61,31 @@ pub async fn get_auth_state(force: bool) -> String {
         None,
     )
     .await;
-    let state: String = if rc == 0 {
-        "logged_in".into()
+    let (state, ttl): (String, f64) = if rc == 0 {
+        ("logged_in".into(), 1800.0)
     } else {
         let low = out.to_lowercase();
-        if low.contains("bad credentials") || low.contains("401") {
-            "expired".into()
+        let real_reject = low.contains("bad credentials")
+            || low.contains("http 401")
+            || low.contains("returned error: 401")
+            || (low.contains("token") && low.contains("invalid"));
+        if real_reject {
+            ("expired".into(), 300.0)
         } else {
-            "not_logged_in".into()
+            // 超时 / 连接失败 / 代理异常等：不算未登录，标记为"无法验证"
+            ("unknown".into(), 60.0)
         }
     };
     let mut c = auth_cache().lock().unwrap();
     c.0 = Some(state.clone());
-    c.1 = now;
+    c.1 = now + ttl;
     state
 }
 
 pub fn set_auth_cache(state: &str) {
     let mut c = auth_cache().lock().unwrap();
     c.0 = Some(state.to_string());
-    c.1 = chrono::Local::now().timestamp() as f64;
+    c.1 = chrono::Local::now().timestamp() as f64 + 1800.0;
 }
 
 async fn gh_api_user() -> (String, String) {

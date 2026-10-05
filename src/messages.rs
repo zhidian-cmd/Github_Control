@@ -15,6 +15,7 @@ const MAP: &[(&str, &str)] = &[
     ("need to specify how to reconcile", "本地与远程分支历史分叉，Git 需要指定合并方式。请重试一次，程序会自动以合并方式处理"),
     // —— 认证 ——
     ("to get started with github cli", "gh 命令行未登录 GitHub，请到设置页登录后重试"),
+    ("token in keyring is invalid", "gh 判定本地保存的 token 失效。若你近期登录过且没改过 token，多半是代理节点瞬时异常——稍等重试一次；反复出现请到设置页重新登录"),
     ("tell me who you are", "还没有设置 Git 身份（用户名/邮箱），无法提交。到设置页登录 GitHub 后会自动配置，重试即可"),
     ("returned error: 403", "GitHub 拒绝了请求（403）：token 权限不够、触发限流，或分支受保护"),
     ("returned error: 404", "远程资源不存在（404）：仓库可能已删除，或私有仓库未登录无权访问"),
