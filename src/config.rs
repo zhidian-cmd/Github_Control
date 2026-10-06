@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 
 pub fn defaults() -> Value {
     json!({
-        "proxy": {"enabled": true, "url": "http://127.0.0.1:31181", "test_timeout": 2},
+        "proxy": {"enabled": true, "url": "http://127.0.0.1:7810", "test_timeout": 2},
         "git": {"cmd_timeout": 300, "default_branch": "main"},
         "gh": {"default_repo": ""},
         "editor": "",
