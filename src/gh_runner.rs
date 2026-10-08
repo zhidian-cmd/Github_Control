@@ -21,12 +21,11 @@ async fn run_gh_resilient(args: &[String], timeout: f64) -> (i32, String) {
     if rc == 0 || !net::is_net_hint(&out) {
         return (rc, out);
     }
-    // 代理通道失败：去代理直连重试
+    // 代理通道失败：去代理直连重试。
+    // 必须用 build_env_direct（连 all_proxy 在内 6 个代理变量全清），
+    // 且 runner::run 对外部环境是"清空后注入"，确保子进程真拿到直连环境。
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let mut no_proxy_env = env::build_env();
-    for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-        no_proxy_env.remove(k);
-    }
+    let no_proxy_env = env::build_env_direct();
     runner::run(&cmd, Some(timeout), None, Some(&no_proxy_env)).await
 }
 
@@ -79,7 +78,13 @@ pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &st
             asset_helper::cleanup(&tmp_files);
             return json!({"ok": false, "error": format!("文件不存在：{f}")});
         }
-        let real = asset_helper::make_ascii_copy(f);
+        let real = match asset_helper::make_ascii_copy(f) {
+            Ok(r) => r,
+            Err(e) => {
+                asset_helper::cleanup(&tmp_files);
+                return json!({"ok": false, "error": e});
+            }
+        };
         if real != *f {
             tmp_files.push(real.clone());
         }
@@ -118,10 +123,12 @@ pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &st
     result
 }
 
-pub async fn release_list(repo_dir: &str) -> Vec<Value> {
+/// 查询 Release 列表。失败必须报错而不是返回空数组——
+/// 未登录/代理故障/gh 版本过旧时，"静默空列表"会让用户误以为远程没有 Release。
+pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
     let remote = match guess_remote(repo_dir).await {
         Some(r) => r,
-        None => return vec![], // 没有远程仓库就没有 Release
+        None => return Err("该仓库没有可用的 GitHub 远程地址，无法查询 Release".into()),
     };
     let (rc, out) = runner::run_gh(
         &[
@@ -132,10 +139,14 @@ pub async fn release_list(repo_dir: &str) -> Vec<Value> {
     )
     .await;
     if rc != 0 {
-        return vec![];
+        return Err(if out.trim().is_empty() {
+            "查询 Release 列表失败（gh 未登录或网络异常）".into()
+        } else {
+            friendly(&out)
+        });
     }
     match serde_json::from_str::<Value>(&out) {
-        Ok(Value::Array(arr)) => arr
+        Ok(Value::Array(arr)) => Ok(arr
             .iter()
             .map(|r| {
                 json!({
@@ -145,8 +156,8 @@ pub async fn release_list(repo_dir: &str) -> Vec<Value> {
                     "date": r.get("publishedAt").and_then(|v| v.as_str()).unwrap_or(""),
                 })
             })
-            .collect(),
-        _ => vec![],
+            .collect()),
+        _ => Err("gh 返回的 Release 数据无法解析".into()),
     }
 }
 

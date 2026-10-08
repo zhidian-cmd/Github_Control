@@ -36,20 +36,28 @@ pub async fn get_remote(repo: &str) -> String {
     static REMOTE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = REMOTE_RE
         .get_or_init(|| regex::Regex::new(r"github\.com[:/](.+?)(?:\.git)?/?$").unwrap());
+    // origin 优先（行为不变）；origin 缺失时兜底用其他远程里能解析出的 github 地址
+    let mut other_github: Option<String> = None;
     for line in out.lines() {
-        if line.starts_with("origin") && line.contains("(fetch)") {
-            if let Some(url) = line.split_whitespace().nth(1) {
-                // 显示成短格式 github.com/user/repo
-                if let Some(m) = re.captures(url) {
-                    if let Some(g) = m.get(1) {
-                        return format!("github.com/{}", g.as_str());
-                    }
+        if !line.contains("(fetch)") {
+            continue;
+        }
+        let is_origin = line.starts_with("origin");
+        if let Some(url) = line.split_whitespace().nth(1) {
+            if let Some(g) = re.captures(url).and_then(|c| c.get(1)) {
+                let short = format!("github.com/{}", g.as_str());
+                if is_origin {
+                    return short;
                 }
+                other_github.get_or_insert(short);
+                continue;
+            }
+            if is_origin {
                 return url.to_string();
             }
         }
     }
-    String::new()
+    other_github.unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]

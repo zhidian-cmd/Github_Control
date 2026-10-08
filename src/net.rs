@@ -50,20 +50,17 @@ pub fn direct_github_reachable(timeout: f64) -> bool {
 }
 
 /// 联网操作前检查代理。返回错误消息，None 表示可用。
+/// 语义与 env::build_env 一致：配置了 url 即视为启用（旧的 enabled 开关已废弃）。
 pub fn proxy_preflight() -> Option<String> {
     let cfg = crate::config::load_config(false);
-    let enabled = cfg
-        .pointer("/proxy/enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !enabled {
-        return None;
-    }
     let url = normalize_proxy_url(
         cfg.pointer("/proxy/url")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
+    if url.is_empty() {
+        return None; // 没配代理 = 纯直连，无需预检
+    }
     let timeout = cfg
         .pointer("/proxy/test_timeout")
         .and_then(|v| v.as_f64())

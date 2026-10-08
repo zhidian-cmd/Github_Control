@@ -285,9 +285,23 @@ const STATE = {
   expandedDirs: new Set(),  // 目录树折叠状态
   uiExpanded: {},           // 每仓库的展开目录表（持久化到 config.json）
   lastCloneDir: "",         // 上次克隆的保存位置，下次打开克隆窗口自动填
+  drafts: {},               // 每仓库的输入草稿 {repoPath: {summary, desc}}，重渲染不丢
 };
 
 const repo = () => STATE.active;
+
+/* 输入草稿：读 / 存 / 清。侧栏与视图是无状态 innerHTML 重渲染，
+   输入框的值只活在 DOM 里，必须在 input 事件里同步进 STATE 才能活过重渲染 */
+function draft(key) {
+  return (STATE.drafts[repo()] || {})[key] || "";
+}
+function saveDraft(key, value) {
+  if (!repo()) return;
+  (STATE.drafts[repo()] ||= {})[key] = value;
+}
+function clearDrafts() {
+  if (repo()) delete STATE.drafts[repo()];
+}
 
 function applyAuthLocks() {
   const st = STATE.auth.state;
@@ -555,13 +569,17 @@ function renderSidebar() {
       <div class="side-list" id="file-list"></div>
       <div class="commit-box">
         ${s?.files.length ? `
-          <input class="input" id="commit-summary" placeholder="摘要（必填）">
-          <textarea class="input" id="commit-desc" placeholder="描述（可选）"></textarea>
+          <input class="input" id="commit-summary" placeholder="摘要（必填）" value="${esc(draft("summary"))}">
+          <textarea class="input" id="commit-desc" placeholder="描述（可选）">${esc(draft("desc"))}</textarea>
           <button class="btn btn-primary commit-btn" id="btn-commit">提交到 ${esc(s?.branch || "")}</button>
         ` : `<div class="hint">没有可提交的改动</div>`}
       </div>`;
     renderFileList(files);
     bindChangesOps();
+    // 草稿实时保存：侧栏是整体 innerHTML 重建，值不进 STATE 就活不过下一次重渲染
+    const sum = $("#commit-summary"), desc = $("#commit-desc");
+    sum?.addEventListener("input", () => saveDraft("summary", sum.value));
+    desc?.addEventListener("input", () => saveDraft("desc", desc.value));
   } else {
     $("#sidebar").innerHTML = `
       <div class="tabs">
@@ -1057,6 +1075,7 @@ function bindChangesOps() {
       });
       if (!d.ok) throw new Error(d.error || "提交失败");
       STATE.selFile = null;
+      clearDrafts();  // 已提交，草稿使命完成
       await refreshAll();
       if (STATE.auth.state === "logged_in") {
         toast("提交完成", "success", { label: "立即推送", onclick: () => $("#op-push")?.click() });
@@ -1694,6 +1713,7 @@ function startClone(url, path, allHistory, allBranches) {
     body: { url, path, all_history: allHistory, all_branches: allBranches },
   }).then((d) => {
     closeDialog("#generic-overlay");
+    if (d.redirected) toast(`保存位置非空，已克隆到子目录：${d.path || ""}`, "", { label: "知道了" });
     pollClone(d.clone_id, url);
   }).catch((e) => {
     toast(e.message, "error");

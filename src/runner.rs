@@ -38,6 +38,12 @@ pub async fn run(
     if cmd.len() > 1 {
         command.args(&cmd[1..]);
     }
+    if env_override.is_some() {
+        // 调用方给了完整环境（如"去代理直连"）：必须先清空再注入。
+        // envs() 本身是增量覆盖，子进程仍会继承本进程的 HTTP_PROXY 等变量，
+        // 只从 map 里删 key 根本删不掉——直连重试会继续走代理，等于没兜底。
+        command.env_clear();
+    }
     command.envs(envs);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     if input.is_some() {

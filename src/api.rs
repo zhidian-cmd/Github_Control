@@ -563,7 +563,13 @@ async fn gh_release_delete(Json(d): Json<Value>) -> Response {
 
 async fn gh_releases(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
-    ok(json!({"ok": true, "releases": gh_runner::release_list(&repo).await}))
+    if repo.trim().is_empty() {
+        return ok(json!({"ok": false, "error": "没有选中的仓库"}));
+    }
+    match gh_runner::release_list(&repo).await {
+        Ok(releases) => ok(json!({"ok": true, "releases": releases})),
+        Err(e) => ok(json!({"ok": false, "error": e})),
+    }
 }
 
 /// 探测当前账号下是否已有同名仓库（推送弹窗用，决定是"创建"还是"关联"）
@@ -1871,7 +1877,11 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         }
     }
 
-    // 目标目录非空处理：clone 到子目录
+    // 目标目录非空处理：clone 到子目录。
+    // 先把"用户实际选择的目录"存下来——记忆必须存它，而不是拼接仓库名后的
+    // 最终克隆目录，否则下次默认路径会多出一层仓库子目录。
+    let user_chosen_dir = path.clone();
+    let mut redirected = false;
     let repo_name = url
         .trim_end_matches('/')
         .rsplit('/')
@@ -1882,6 +1892,7 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         .to_string();
     if dir_nonempty(&path) {
         path = std::path::Path::new(&path).join(&repo_name).to_string_lossy().into_owned();
+        redirected = true;
     }
     if dir_nonempty(&path) {
         return ok(json!({"ok": false, "error": format!("目标目录 {path} 非空，请换一个位置")}));
@@ -1891,8 +1902,8 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
     path = crate::paths::canonicalize_human(p.parent().unwrap_or_else(|| std::path::Path::new(".")))
         .map(|par| par.join(p.file_name().unwrap_or_default()).to_string_lossy().into_owned())
         .unwrap_or_else(|| path.clone());
-    // 记住这次用的保存位置
-    config::update_config(&json!({"ui": {"last_clone_dir": path}}));
+    // 记住这次用的保存位置（用户所选目录，非自动拼接后的子目录）
+    config::update_config(&json!({"ui": {"last_clone_dir": user_chosen_dir}}));
 
     let mut args = vec!["clone".into()];
     if !all_history {
@@ -1914,8 +1925,8 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         .unwrap_or(0);
     let clone_id = millis.to_string();
     let log_path = paths::logs_dir().join(format!("clone_{clone_id}.log"));
-    spawn_clone_worker(clone_id.clone(), args, path, log_path, env_map);
-    ok(json!({"ok": true, "clone_id": clone_id}))
+    spawn_clone_worker(clone_id.clone(), args, path.clone(), log_path, env_map);
+    ok(json!({"ok": true, "clone_id": clone_id, "path": path, "redirected": redirected}))
 }
 
 async fn repo_clone_progress(Query(q): Query<Q>) -> Response {
