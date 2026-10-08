@@ -54,26 +54,47 @@ pub async fn get_auth_state(force: bool) -> String {
         c.1 = now + 1800.0;
         return "not_logged_in".into();
     }
-    let (rc, out) = runner::run_gh(&["auth".into(), "status".into()], Some(15.0)).await;
-    let (state, ttl): (String, f64) = if rc == 0 {
-        ("logged_in".into(), 1800.0)
-    } else {
-        let low = out.to_lowercase();
-        let real_reject = low.contains("bad credentials")
-            || low.contains("http 401")
-            || low.contains("returned error: 401")
-            || (low.contains("token") && low.contains("invalid"));
-        if real_reject {
-            ("expired".into(), 300.0)
-        } else {
-            // 超时 / 连接失败 / 代理异常等：不算未登录，标记为"无法验证"
-            ("unknown".into(), 60.0)
-        }
-    };
+    let (state, ttl) = verify_token_online().await;
     let mut c = auth_cache().lock().unwrap();
     c.0 = Some(state.clone());
     c.1 = now + ttl;
     state
+}
+
+/// 联网验证 token 是否真的有效。
+/// 实测教训（run.log 2026-10-08 21:05~21:07）：同一 token 两分钟前 `gh auth status`
+/// 刚验证通过，之后同链路却报 "The token in keyring is invalid"——代理节点劫持
+/// HTTPS 响应时 auth status 也会打印这句话，不能据此直接判"过期"。
+/// 故改用 REST `gh api user`：成功 → logged_in；GitHub 明确回复 401/Bad credentials
+/// 且复测一次仍如此 → expired；其余（超时/返回 HTML 垃圾/连接失败）→ unknown。
+async fn verify_token_online() -> (String, f64) {
+    for attempt in 0..2 {
+        let (rc, out) = runner::run_gh(
+            &["api".into(), "user".into(), "--jq".into(), ".login".into()],
+            Some(15.0),
+        )
+        .await;
+        let trimmed = out.trim();
+        if rc == 0 && !trimmed.is_empty() && !trimmed.starts_with('<') {
+            return ("logged_in".into(), 1800.0);
+        }
+        let low = out.to_lowercase();
+        let real_reject = low.contains("bad credentials")
+            || low.contains("http 401")
+            || low.contains("returned error: 401");
+        if real_reject {
+            if attempt == 0 {
+                // 单次 401 不定案：免费代理节点可能伪造 401，复测一次再下结论
+                tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                continue;
+            }
+            return ("expired".into(), 300.0);
+        }
+        break;
+    }
+    // 超时 / 连接失败 / 返回 HTML（gh 报 invalid character '<'）等：
+    // 不算未登录，标记"无法验证"，60 秒后允许重试，网络恢复后自愈
+    ("unknown".into(), 60.0)
 }
 
 pub fn set_auth_cache(state: &str) {

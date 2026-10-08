@@ -474,17 +474,20 @@ async fn config_proxy_test() -> Response {
         }
         return ok(json!({"ok": false, "error": error, "direct_ok": direct_ok}));
     }
-    // 用强制代理环境测 gh，测的就是这条链路本身
+    // 用强制代理环境测 gh，测的就是这条链路本身。
+    // 探测命令用 REST `gh api user`（与 release 列表同链路）而不是 auth status：
+    // 代理节点劫持响应时 auth status 会误报 "The token in keyring is invalid"，
+    // REST + 内容分类则能区分"token 真失效(401)"与"节点返回垃圾(非 JSON)"。
     let gh = paths::gh_exe().to_string_lossy().into_owned();
     let env_map = env::build_env_forced_proxy(&url);
     let (rc, out) = runner::run(
-        &[gh, "auth".into(), "status".into()],
+        &[gh, "api".into(), "user".into(), "--jq".into(), ".login".into()],
         Some(20.0),
         None,
         Some(&env_map),
     )
     .await;
-    if rc == 0 {
+    if rc == 0 && !out.trim().is_empty() {
         let note = if direct_ok {
             "代理可用，gh 联网正常（直连此刻也通）".to_string()
         } else {
@@ -493,11 +496,16 @@ async fn config_proxy_test() -> Response {
         ok(json!({"ok": true, "gh_ok": true, "direct_ok": direct_ok, "note": note}))
     } else {
         let err: String = out.chars().take(300).collect();
-        let hint = match crate::messages::matched_hint(&out) {
-            Some(h) => format!("。提示：{h}"),
-            None => String::new(),
+        let low = out.to_lowercase();
+        let real_reject = low.contains("bad credentials")
+            || low.contains("http 401")
+            || low.contains("returned error: 401");
+        let hint = if real_reject {
+            "GitHub 回复 token 校验失败(401)。若近期没改过 token，先重试一次——代理节点劫持响应也会造成这种误报；反复出现才需要重新登录".to_string()
+        } else {
+            "该代理节点返回了异常内容（网页/空响应而非 JSON），多为节点不稳定或劫持了 HTTPS 流量，建议换节点后重试".to_string()
         };
-        let mut error = format!("代理端口可达，但 gh 联网失败：{err}{hint}");
+        let mut error = format!("代理端口可达，但经此代理访问 GitHub 失败：{err}\n提示：{hint}");
         if !direct_ok {
             error.push_str("\n（本机直连同样不通）");
         }
