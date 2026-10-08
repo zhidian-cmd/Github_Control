@@ -124,7 +124,10 @@ pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &st
 }
 
 /// 查询 Release 列表。失败必须报错而不是返回空数组——
-/// 未登录/代理故障/gh 版本过旧时，"静默空列表"会让用户误以为远程没有 Release。
+/// 未登录/代理故障时，"静默空列表"会让用户误以为远程没有 Release。
+/// 实现说明：不用 `gh release list --json` —— gh 2.101+ 把该子命令改成了
+/// GraphQL 端点，在部分代理链路下会被 406 Not Acceptable 拒绝（实测）；
+/// 而 REST 端点（gh api）在同一链路下验证可用，因此直接打 REST。
 pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
     let remote = match guess_remote(repo_dir).await {
         Some(r) => r,
@@ -132,8 +135,8 @@ pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
     };
     let (rc, out) = runner::run_gh(
         &[
-            "release".into(), "list".into(), "-R".into(), remote,
-            "--json".into(), "tagName,name,isLatest,publishedAt".into(),
+            "api".into(),
+            format!("repos/{remote}/releases?per_page=100"),
         ],
         None,
     )
@@ -145,20 +148,31 @@ pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
             friendly(&out)
         });
     }
-    match serde_json::from_str::<Value>(&out) {
-        Ok(Value::Array(arr)) => Ok(arr
-            .iter()
-            .map(|r| {
-                json!({
-                    "tag": r.get("tagName").and_then(|v| v.as_str()).unwrap_or(""),
-                    "title": r.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-                    "latest": r.get("isLatest").and_then(|v| v.as_bool()).unwrap_or(false),
-                    "date": r.get("publishedAt").and_then(|v| v.as_str()).unwrap_or(""),
-                })
+    // REST 返回按 created_at 倒序的数组；GitHub 语义里 latest = 最新一个
+    // 非 draft 且非 prerelease 的 Release，自己算（gh 的 isLatest 就是这个）
+    let arr: Vec<Value> = match serde_json::from_str(&out) {
+        Ok(Value::Array(a)) => a,
+        _ => return Err("gh 返回的 Release 数据无法解析".into()),
+    };
+    let mut latest_done = false;
+    let list = arr
+        .iter()
+        .map(|r| {
+            let draft = r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+            let pre = r.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false);
+            let latest = !draft && !pre && !latest_done;
+            if latest {
+                latest_done = true;
+            }
+            json!({
+                "tag": r.get("tag_name").and_then(|v| v.as_str()).unwrap_or(""),
+                "title": r.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                "latest": latest,
+                "date": r.get("published_at").and_then(|v| v.as_str()).unwrap_or(""),
             })
-            .collect()),
-        _ => Err("gh 返回的 Release 数据无法解析".into()),
-    }
+        })
+        .collect();
+    Ok(list)
 }
 
 pub async fn release_delete(tag: &str, repo_dir: &str) -> Value {
