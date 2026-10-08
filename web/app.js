@@ -1551,11 +1551,15 @@ function viewRelease(main) {
     <div class="view">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
         <h1 class="view-title" style="margin:0">Release</h1>
-        <button class="btn btn-primary" id="btn-new-release">＋ 新建 Release</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn" id="rel-refresh">🔄 刷新</button>
+          <button class="btn btn-primary" id="btn-new-release">＋ 新建 Release</button>
+        </div>
       </div>
-      <div id="release-list"><div class="empty">加载中…</div></div>
+      <div id="release-list"><div class="empty"><h3>未加载</h3>
+        <p>每次进入此页不会自动请求远程。点 [刷新] 按需拉取最新 Release 列表。</p></div></div>
     </div>`;
-  loadReleases();
+  $("#rel-refresh").onclick = () => loadReleases();
 
   $("#btn-new-release").onclick = () => {
     $("#generic-title").textContent = "新建 Release";
@@ -1587,9 +1591,13 @@ function viewRelease(main) {
   };
 }
 
+let _relLoading = false;
+
 function loadReleases() {
   const box = $("#release-list");
-  if (!box) return;
+  if (!box || _relLoading) return;
+  _relLoading = true;
+  box.innerHTML = `<div class="empty">加载中…</div>`;
   api(`/api/gh/releases?path=${encodeURIComponent(repo())}`)
     .then((d) => {
       box.innerHTML = d.releases.length
@@ -1636,7 +1644,8 @@ function loadReleases() {
         });
       };
     })
-    .catch((e) => { box.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; });
+    .catch((e) => { box.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; })
+    .finally(() => { _relLoading = false; });
 }
 
 /* ----- 欢迎视图 ----- */
