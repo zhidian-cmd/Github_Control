@@ -38,12 +38,6 @@ async function api(path, { method = "GET", body } = {}) {
       503: "后端服务不可达，请重启程序",
     }[res.status] || `请求失败 (${res.status})`;
     const msg = data.error || fallback;
-    // Token 中途过期：顶栏徽章立刻变黄（鲁棒 #6）
-    if (/Bad credentials|HTTP 401|token 无效|登录已过期/.test(msg)) {
-      STATE.auth = { state: "expired", username: "" };
-      renderAuthChip();
-      applyAuthLocks();
-    }
     throw new Error(msg);
   }
   return data;
@@ -136,7 +130,6 @@ async function runBtn(btn, fn) {
     progressOff();
     btn.disabled = false;
     btn.innerHTML = old;
-    applyAuthLocks();
   }
 }
 
@@ -273,7 +266,6 @@ function hideMenu() { $("#menu")?.classList.remove("open"); }
 /* ---------- 全局状态 ---------- */
 
 const STATE = {
-  auth: { state: "loading", username: "" },
   repos: [],
   active: "",          // 当前仓库路径
   status: null,        // active 仓库的 status
@@ -303,18 +295,69 @@ function clearDrafts() {
   if (repo()) delete STATE.drafts[repo()];
 }
 
-function applyAuthLocks() {
-  const st = STATE.auth.state;
-  const bad = st !== "logged_in";
-  const titleMap = {
-    expired: "登录已过期，请重新登录",
-    unknown: "网络异常，暂时无法验证登录；如操作报网络错误请检查代理",
-    not_logged_in: "请先登录",
-  };
-  $$("[data-needs-auth]").forEach((b) => {
-    b.disabled = bad || (b.dataset.needsRepo === "1" && !repo());
-    b.title = bad ? (titleMap[st] || "请先登录") : "";
+/* ---------- 临时登录（按需提示，用完即退） ---------- */
+
+/* 登录机制：启动不验证、界面不显示登录状态。本地操作（提交/回滚等）完全离线；
+   仅当推送/发布/拉取私有仓库等联网操作报认证类错误时，才弹窗要求临时登录，
+   操作结束（无论成败）自动登出，不保持会话。 */
+
+function isAuthError(msg) {
+  return /(Bad credentials|HTTP 401|\b401\b|not logged in|gh auth login|could not read Username|token 无效|token 失效|未登录|认证失败|请到设置页登录|登录已过期)/i.test(String(msg));
+}
+
+/* 弹窗收集 token；取消则 resolve(null) */
+function tempLogin(desc) {
+  return new Promise((resolve) => {
+    $("#generic-title").textContent = "临时登录 GitHub";
+    $("#generic-body").innerHTML = `
+      <p class="help" style="margin-top:0">${esc(desc)}需要 GitHub 认证。请输入 Personal Access Token——
+      仅本次操作使用，完成后自动退出登录，不会保持会话。</p>
+      <div class="field"><label>Personal Access Token</label>
+        <input class="input" type="password" id="temp-token" placeholder="ghp_…" autocomplete="off">
+        <span class="help">
+          <a href="https://github.com/settings/tokens/new?scopes=repo,read:org" target="_blank">点此创建 token</a>（勾选 repo、read:org）
+        </span>
+      </div>`;
+    $("#generic-ok").textContent = "登录并继续";
+    $("#generic-ok").onclick = () => {
+      const t = $("#temp-token").value.trim();
+      if (!t) { toast("请输入 token", "error"); return; }
+      closeDialog("#generic-overlay");
+      resolve(t);
+    };
+    openDialog("#generic-overlay");
+    const cancel = document.createElement("button");
+    cancel.className = "btn";
+    cancel.textContent = "取消";
+    cancel.style.marginRight = "8px";
+    cancel.onclick = () => { closeDialog("#generic-overlay"); resolve(null); };
+    $("#generic-ok").before(cancel);
   });
+}
+
+/* 包一层联网操作：认证失败 → 弹临时登录 → 重试一次 → 结束后自动登出 */
+async function authedOp(desc, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!isAuthError(e.message)) throw e;
+    const token = await tempLogin(desc);
+    if (!token) throw e;
+    try {
+      const d = await api("/api/auth/login", { method: "POST", body: { token } });
+      if (!d.ok) throw new Error(d.error || "登录失败");
+      return await fn();
+    } finally {
+      // 临时会话用完即退：本次操作结束（成功或失败）都不保持登录
+      api("/api/auth/logout", { method: "POST" }).catch(() => {});
+    }
+  }
+}
+
+/* 未选仓库时禁用需要仓库的顶栏按钮（登录不再锁定按钮，认证在操作时按需提示） */
+function applyRepoLocks() {
+  const bad = !repo();
+  $$("[data-needs-repo]").forEach((b) => { b.disabled = bad; });
 }
 
 /* ---------- 顶栏 ---------- */
@@ -327,29 +370,28 @@ function renderTopbar() {
       <span class="name">${esc(cur ? cur.name : repo() ? "仓库" : "选择仓库")}</span>
       <span class="caret">▼</span>
     </button>
-    <button class="btn" id="op-pull" data-needs-auth data-needs-repo="1">🔄 更新</button>
-    <button class="btn" id="op-push" data-needs-auth data-needs-repo="1">⬆ 推送</button>
-    <button class="btn" id="op-release" data-needs-auth data-needs-repo="1">📦 发布</button>
+    <button class="btn" id="op-pull" data-needs-repo="1">🔄 更新</button>
+    <button class="btn" id="op-push" data-needs-repo="1">⬆ 推送</button>
+    <button class="btn" id="op-release" data-needs-repo="1">📦 发布</button>
     <button class="icon-btn" id="op-explorer" data-needs-repo="1" title="在资源管理器中打开仓库">📂</button>
-    <button class="icon-btn" id="op-web" data-needs-auth data-needs-repo="1" title="在浏览器打开 GitHub 页面">🌐</button>
+    <button class="icon-btn" id="op-web" data-needs-repo="1" title="在浏览器打开 GitHub 页面">🌐</button>
     <span class="spacer"></span>
-    <button class="auth-chip" id="auth-chip"><span class="dot"></span>检查中…</button>
     <button class="icon-btn" id="btn-settings" title="设置">⚙</button>`;
 
-  renderAuthChip();
-  applyAuthLocks();
+  applyRepoLocks();
 
   $("#repo-switch").onclick = (e) => {
     e.stopPropagation();
     openRepoMenu(e.currentTarget);
   };
   $("#op-pull").onclick = (ev) => runBtn(ev.target, async () => {
-    const d = await api("/api/git/pull", { method: "POST", body: { repo: repo() } });
+    const d = await authedOp("更新（拉取远程）", () =>
+      api("/api/git/pull", { method: "POST", body: { repo: repo() } }));
     if (!d.ok) throw new Error(d.error || "更新失败");
     await refreshAll();
     toast("已更新", "success");
   });
-  $("#op-push").onclick = (ev) => runBtn(ev.target, async () => {
+  $("#op-push").onclick = (ev) => runBtn(ev.target, () => authedOp("推送代码", async () => {
     const baseName = repo().replace(/[\\/]+$/, "").split(/[\\/]/).pop();
     // 没有远程仓库时，先让用户选名字和可见性
     const ho = await api(`/api/git/has_origin?path=${encodeURIComponent(repo())}`);
@@ -381,7 +423,7 @@ function renderTopbar() {
     if (!d.ok) throw new Error(d.error || "推送失败");
     await refreshAll();
     toast(d.hint || "推送完成", "success");
-  });
+  }));
   $("#op-release").onclick = () => showView("#release");
   $("#op-explorer").onclick = (ev) => runBtn(ev.target, async () => {
     const d = await api("/api/repo/open_explorer", { method: "POST", body: { path: repo() } });
@@ -449,20 +491,6 @@ function askCreateRemote(defaultName) {
       resolve({ name, private: vis === "private" });
     };
   });
-}
-
-function renderAuthChip() {
-  const chip = $("#auth-chip");
-  chip.className = `auth-chip state-${STATE.auth.state}`;
-  const label = {
-    logged_in: `已登录 ${STATE.auth.username || ""}`,
-    expired: "已过期 · 重新登录",
-    not_logged_in: "未登录 · 去登录",
-    unknown: "网络异常 · 无法验证",
-    loading: "检查中…",
-  }[STATE.auth.state] || "未登录";
-  chip.innerHTML = `<span class="dot"></span>${esc(label)}`;
-  chip.onclick = () => showView(STATE.auth.state === "logged_in" ? "#settings" : "#login");
 }
 
 function openRepoMenu(anchor) {
@@ -1077,11 +1105,7 @@ function bindChangesOps() {
       STATE.selFile = null;
       clearDrafts();  // 已提交，草稿使命完成
       await refreshAll();
-      if (STATE.auth.state === "logged_in") {
-        toast("提交完成", "success", { label: "立即推送", onclick: () => $("#op-push")?.click() });
-      } else {
-        toast("提交完成（未推送，点顶栏 [推送] 上传）", "success");
-      }
+      toast("提交完成", "success", { label: "立即推送", onclick: () => $("#op-push")?.click() });
   }));
 }
 
@@ -1554,10 +1578,10 @@ function viewRelease(main) {
       const tag = $("#rel-tag").value.trim();
       if (!tag) { toast("请填写 tag", "error"); return; }
       const files = $("#rel-files").value.split(" | ").filter(Boolean);
-      const d = await api("/api/gh/release", {
+      const d = await authedOp(`发布 Release ${tag}`, () => api("/api/gh/release", {
         method: "POST",
         body: { tag, files, title: $("#rel-title").value, notes: $("#rel-notes").value, repo: repo() },
-      });
+      }));
       closeDialog("#generic-overlay");
       toast(`Release 已发布 ${d.url || ""}`, "success");
       loadReleases();
@@ -1600,7 +1624,8 @@ function loadReleases() {
         });
         if (!ok) return;
         await runBtn(btn, async () => {
-          await api("/api/gh/release_delete", { method: "POST", body: { tag: btn.dataset.del, repo: repo() } });
+          await authedOp(`删除 Release ${btn.dataset.del}`, () =>
+            api("/api/gh/release_delete", { method: "POST", body: { tag: btn.dataset.del, repo: repo() } }));
           toast("已删除", "success");
           loadReleases();
         });
@@ -1820,7 +1845,11 @@ function viewSettings(main) {
         <div class="setting-block">
           <h3>账号</h3>
           <div id="account-state" style="display:flex;align-items:center;gap:10px;min-height:28px">
-            <span class="help">正在检查登录状态…</span>
+            <span class="help">本地操作无需登录。推送/发布等联网操作会按需提示临时登录，操作完成后自动退出、不保持会话。</span>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <a class="btn btn-sm" href="#login">手动登录</a>
+            <button class="btn btn-sm" id="btn-manual-logout">退出登录</button>
           </div>
         </div>
         <div class="setting-block">
@@ -1951,33 +1980,12 @@ function bindSettings() {
 }
 
 function renderAccountBlock() {
-  const box = $("#account-state");
-  if (STATE.auth.state === "logged_in") {
-    box.innerHTML = `<span class="badge badge-g">已登录：${esc(STATE.auth.username)}</span>
-      <button class="btn btn-sm" id="btn-logout">登出</button>`;
-    $("#btn-logout").onclick = async (e) => runBtn(e.target, async () => {
-      await api("/api/auth/logout", { method: "POST" });
-      STATE.auth = { state: "not_logged_in", username: "" };
-      renderAuthChip();
-      applyAuthLocks();
-      renderAccountBlock();
-      toast("已登出", "success");
-    });
-  } else if (STATE.auth.state === "expired") {
-    box.innerHTML = `<span class="badge badge-y">登录已过期</span> <a href="#login">重新登录</a>`;
-  } else if (STATE.auth.state === "unknown") {
-    box.innerHTML = `<span class="badge badge-y">网络异常，无法验证登录</span>
-      <button class="btn btn-sm" id="btn-reverify">重试</button>`;
-    $("#btn-reverify").onclick = async (e) => runBtn(e.target, async () => {
-      const v = await api("/api/auth/verify");
-      STATE.auth = { state: v.state, username: v.username || "" };
-      renderAuthChip();
-      applyAuthLocks();
-      renderAccountBlock();
-    });
-  } else {
-    box.innerHTML = `<span class="badge badge-k">未登录</span> <a href="#login">去登录</a>`;
-  }
+  const btn = $("#btn-manual-logout");
+  if (!btn) return;
+  btn.onclick = async (e) => runBtn(e.target, async () => {
+    await api("/api/auth/logout", { method: "POST" });
+    toast("已登出", "success");
+  });
 }
 
 /* ----- 登录视图 ----- */
@@ -1999,8 +2007,8 @@ function viewLogin(main) {
         <button class="btn btn-primary" type="submit">登录</button>
       </form>
       <p class="help" style="margin-top:14px">
-        说明：GitHub 已于 2021 年禁用账号密码认证，PAT 是唯一官方支持的登录方式。
-        本地操作（打开仓库、提交、回滚）无需登录。
+        说明：本地操作（打开仓库、提交、回滚）无需登录。手动登录会保持到点击 [退出登录] 为止；
+        推送/发布时按需弹出的临时登录则在该次操作结束后自动退出。
       </p>
     </div>`;
   const prev = location.hash;
@@ -2010,9 +2018,6 @@ function viewLogin(main) {
     await runBtn(btn, async () => {
       const d = await api("/api/auth/login", { method: "POST", body: { token: $("#token").value } });
       if (!d.ok) throw new Error(d.error || "登录失败");
-      STATE.auth = { state: "logged_in", username: d.username || "" };
-      renderAuthChip();
-      applyAuthLocks();
       toast(`登录成功，欢迎 ${d.username}`, "success");
       setTimeout(() => showView(prev === "#login" || !repo() ? "#welcome" : "#changes"), 600);
     });
@@ -2091,7 +2096,7 @@ let _sidebarSig = "";
 
 function renderAll() {
   // 拆"重建"和"更新"：签名没变就不整体重写 DOM（性能 2-4）
-  const tSig = `${STATE.auth.state}|${STATE.auth.username}|${repo()}`;
+  const tSig = `${repo()}`;
   if (tSig !== _topbarSig) { _topbarSig = tSig; renderTopbar(); }
   const sSig = JSON.stringify([STATE.tab, STATE.status?.branch,
     (STATE.status?.files || []).map((f) => f.path).join(","), STATE.selFile,
@@ -2137,12 +2142,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderMain();
 
   try {
-    const [auth, repos, cfg] = await Promise.all([
-      api("/api/auth/status"),
+    const [repos, cfg] = await Promise.all([
       api("/api/repo/list"),
       api("/api/config"),
     ]);
-    STATE.auth = { state: auth.state, username: auth.username || "" };
     STATE.repos = repos.repositories;
     STATE.active = repos.active && STATE.repos.some((r) => r.path === repos.active)
       ? repos.active : "";
@@ -2180,14 +2183,4 @@ document.addEventListener("DOMContentLoaded", async () => {
       body: { msg: `boot: ui interactive +${Math.round(performance.now())}ms (repo=${repo() ? "yes" : "no"})` },
     });
   } catch {}
-
-  // 后台异步真实验证登录态（乐观值错了再更新 UI），不阻塞启动（v3.1 #3 第三层）
-  api("/api/auth/verify").then((v) => {
-    if (v.state !== STATE.auth.state || (v.username || "") !== STATE.auth.username) {
-      STATE.auth = { state: v.state, username: v.username || "" };
-      renderAuthChip();
-      applyAuthLocks();
-      if ($("#account-state")) renderAccountBlock();
-    }
-  }).catch(() => {});
 });
