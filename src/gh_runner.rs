@@ -133,6 +133,14 @@ pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
         Some(r) => r,
         None => return Err("该仓库没有可用的 GitHub 远程地址，无法查询 Release".into()),
     };
+    // 通道一：gh-proxy 镜像透传 GitHub API——匿名、直连、免登录免代理，
+    // 公开仓库零流量走 GitHub 本体。私有仓库镜像匿名拿不到（404），走通道二。
+    if let Some(slug) = remote.strip_prefix("github.com/") {
+        if let Ok(list) = mirror_release_list(slug).await {
+            return Ok(list);
+        }
+    }
+    // 通道二：gh api（带已保存 token，直连优先、失败自动兜底走代理）
     let (rc, out) = runner::run_gh(
         &[
             "api".into(),
@@ -148,11 +156,49 @@ pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
             friendly(&out)
         });
     }
-    // REST 返回按 created_at 倒序的数组；GitHub 语义里 latest = 最新一个
-    // 非 draft 且非 prerelease 的 Release，自己算（gh 的 isLatest 就是这个）
-    let arr: Vec<Value> = match serde_json::from_str(&out) {
+    parse_releases_json(&out).ok_or_else(|| "gh 返回的 Release 数据无法解析".into())
+}
+
+/// 经 gh-proxy.com 镜像请求 GitHub API 的 Release 列表（匿名）。
+/// 用系统 curl 直连（清空代理变量）；非 200 或解析失败一律返回 Err，由调用方回落 gh api。
+async fn mirror_release_list(slug: &str) -> Result<Vec<Value>, String> {
+    let url = format!("https://gh-proxy.com/https://api.github.com/repos/{slug}/releases?per_page=100");
+    let env_map = env::build_env_direct();
+    let (rc, out) = runner::run(
+        &[
+            "curl".into(),
+            "-sL".into(),
+            "--max-time".into(),
+            "30".into(),
+            "-w".into(),
+            "\n%{http_code}".into(),
+            url,
+        ],
+        Some(35.0),
+        None,
+        Some(&env_map),
+    )
+    .await;
+    if rc != 0 {
+        return Err("镜像请求失败".into());
+    }
+    // curl -w 把状态码附在最后一行
+    let (body, code) = match out.rsplit_once('\n') {
+        Some((b, c)) => (b.trim(), c.trim()),
+        None => return Err("镜像响应异常".into()),
+    };
+    if code != "200" {
+        return Err(format!("镜像返回 {code}"));
+    }
+    parse_releases_json(body).ok_or_else(|| "镜像返回的 Release 数据无法解析".into())
+}
+
+/// 解析 GitHub REST releases JSON（gh api 与镜像透传的返回格式一致）。
+/// latest = 最新一个非 draft 且非 prerelease 的 Release（数组按时间倒序）。
+fn parse_releases_json(out: &str) -> Option<Vec<Value>> {
+    let arr: Vec<Value> = match serde_json::from_str(out.trim()) {
         Ok(Value::Array(a)) => a,
-        _ => return Err("gh 返回的 Release 数据无法解析".into()),
+        _ => return None,
     };
     let mut latest_done = false;
     let list = arr
@@ -164,15 +210,30 @@ pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
             if latest {
                 latest_done = true;
             }
+            let assets: Vec<Value> = r
+                .get("assets")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .map(|x| {
+                            json!({
+                                "name": x.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                                "url": x.get("browser_download_url").and_then(|v| v.as_str()).unwrap_or(""),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             json!({
                 "tag": r.get("tag_name").and_then(|v| v.as_str()).unwrap_or(""),
                 "title": r.get("name").and_then(|v| v.as_str()).unwrap_or(""),
                 "latest": latest,
                 "date": r.get("published_at").and_then(|v| v.as_str()).unwrap_or(""),
+                "assets": assets,
             })
         })
         .collect();
-    Ok(list)
+    Some(list)
 }
 
 pub async fn release_delete(tag: &str, repo_dir: &str) -> Value {

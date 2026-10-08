@@ -93,16 +93,11 @@ fn is_github_host(host: &str) -> bool {
     host == "github.com" || host == "www.github.com"
 }
 
-/// 克隆专用：按主机名判断，只有真正的 github.com 走代理，
-/// 中转站（URL 路径里才含 github.com）直连，避免双重代理
-pub fn clone_env(url: &str) -> HashMap<String, String> {
-    let mut env = build_env();
-    if !is_github_host(&host_of(url)) {
-        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            env.remove(k);
-        }
-    }
-    env
+/// 克隆专用环境：恒直连。克隆是特殊通道——公开仓库走 gh-proxy 镜像加速，
+/// 私有仓库直连 github.com（credential helper 自动带 token），
+/// 代理设置不参与克隆（仅在克隆 worker 的最后兜底里作为救命链路出现）。
+pub fn clone_env(_url: &str) -> HashMap<String, String> {
+    build_env_direct()
 }
 
 /// 是否 github.com 官方地址

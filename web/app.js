@@ -295,11 +295,11 @@ function clearDrafts() {
   if (repo()) delete STATE.drafts[repo()];
 }
 
-/* ---------- 临时登录（按需提示，用完即退） ---------- */
+/* ---------- Token 按需输入（无登录会话概念） ---------- */
 
-/* 登录机制：启动不验证、界面不显示登录状态。本地操作（提交/回滚等）完全离线；
-   仅当推送/发布/拉取私有仓库等联网操作报认证类错误时，才弹窗要求临时登录，
-   操作结束（无论成败）自动登出，不保持会话。 */
+/* Token = 保存在本机的写操作凭据：启动不验证、界面不显示登录状态。
+   本地操作与公开仓库（克隆/下载/查看）完全不需要它；
+   仅当推送/发布等写操作报认证错误时弹窗输入一次，保存后长期有效、可在设置页查看掩码。 */
 
 function isAuthError(msg) {
   return /(Bad credentials|HTTP 401|\b401\b|not logged in|gh auth login|could not read Username|token 无效|token 失效|未登录|认证失败|请到设置页登录|登录已过期)/i.test(String(msg));
@@ -308,17 +308,17 @@ function isAuthError(msg) {
 /* 弹窗收集 token；取消则 resolve(null) */
 function tempLogin(desc) {
   return new Promise((resolve) => {
-    $("#generic-title").textContent = "临时登录 GitHub";
+    $("#generic-title").textContent = "需要 GitHub Token";
     $("#generic-body").innerHTML = `
-      <p class="help" style="margin-top:0">${esc(desc)}需要 GitHub 认证。请输入 Personal Access Token——
-      仅本次操作使用，完成后自动退出登录，不会保持会话。</p>
+      <p class="help" style="margin-top:0">${esc(desc)}是写操作，需要 GitHub 认证。请输入 Personal Access Token——
+      仅保存在本机凭据管理器，之后推送/发布自动使用；公开仓库的克隆与下载无需 Token。</p>
       <div class="field"><label>Personal Access Token</label>
         <input class="input" type="password" id="temp-token" placeholder="ghp_…" autocomplete="off">
         <span class="help">
           <a href="https://github.com/settings/tokens/new?scopes=repo,read:org" target="_blank">点此创建 token</a>（勾选 repo、read:org）
         </span>
       </div>`;
-    $("#generic-ok").textContent = "登录并继续";
+    $("#generic-ok").textContent = "保存并继续";
     $("#generic-ok").onclick = () => {
       const t = $("#temp-token").value.trim();
       if (!t) { toast("请输入 token", "error"); return; }
@@ -335,7 +335,8 @@ function tempLogin(desc) {
   });
 }
 
-/* 包一层联网操作：认证失败 → 弹临时登录 → 重试一次 → 结束后自动登出 */
+/* 包一层写操作：认证失败 → 弹窗输入 token → 保存后重试一次。
+   不再自动登出——Token 是本机保存的凭据，不是会话。 */
 async function authedOp(desc, fn) {
   try {
     return await fn();
@@ -343,14 +344,9 @@ async function authedOp(desc, fn) {
     if (!isAuthError(e.message)) throw e;
     const token = await tempLogin(desc);
     if (!token) throw e;
-    try {
-      const d = await api("/api/auth/login", { method: "POST", body: { token } });
-      if (!d.ok) throw new Error(d.error || "登录失败");
-      return await fn();
-    } finally {
-      // 临时会话用完即退：本次操作结束（成功或失败）都不保持登录
-      api("/api/auth/logout", { method: "POST" }).catch(() => {});
-    }
+    const d = await api("/api/auth/login", { method: "POST", body: { token } });
+    if (!d.ok) throw new Error(d.error || "Token 保存失败");
+    return await fn();
   }
 }
 
@@ -1600,6 +1596,12 @@ function loadReleases() {
         ? `<div class="card">${d.releases.map((r) => {
             const remote = STATE.repos.find((x) => x.path === repo())?.remote || "";
             const webUrl = githubWebUrl(remote, r.tag);
+            // 下载走 gh-proxy 镜像（浏览器直连，无需代理/登录）；slug 从 remote 取
+            const slug = remote.startsWith("github.com/") ? remote.slice("github.com/".length) : "";
+            const mirror = (u) => `https://gh-proxy.com/${u}`;
+            const srcZip = slug && r.tag
+              ? mirror(`https://github.com/${slug}/archive/refs/tags/${encodeURIComponent(r.tag)}.zip`) : "";
+            const assets = Array.isArray(r.assets) ? r.assets : [];
             return `
             <div class="release-row">
               <div class="head">
@@ -1608,8 +1610,11 @@ function loadReleases() {
                 ${r.latest ? `<span class="badge badge-g">Latest</span>` : ""}
                 <span class="help" style="font-size:11px">${esc(r.date || "")}</span>
                 ${webUrl ? `<a class="btn btn-sm" href="${webUrl}" target="_blank">查看</a>` : ""}
+                ${srcZip ? `<a class="btn btn-sm" href="${srcZip}" target="_blank">源码</a>` : ""}
                 <button class="btn btn-sm" data-del="${esc(r.tag)}">删除</button>
               </div>
+              ${assets.length ? `<div class="help" style="margin-top:6px">附件：${assets.map((a) =>
+                `<a href="${esc(mirror(a.url))}" target="_blank">${esc(a.name || "附件")}</a>`).join(" · ")}</div>` : ""}
             </div>`;
           }).join("")}</div>`
         : `<div class="empty"><h3>还没有 Release</h3><p>点右上角 [＋ 新建 Release] 发布第一个版本</p></div>`;
@@ -1709,8 +1714,9 @@ async function afterRepoReady(path) {
 function openCloneDialog() {
   $("#generic-title").textContent = "克隆仓库";
   $("#generic-body").innerHTML = `
-    <div class="field"><label>仓库地址（只需粘贴 URL，支持 gh-proxy 等中转链接）</label>
-      <input class="input" id="clone-url" placeholder="https://github.com/user/repo.git"></div>
+    <div class="field"><label>仓库地址（粘贴 URL 即可）</label>
+      <input class="input" id="clone-url" placeholder="https://github.com/user/repo.git">
+      <span class="help">公开仓库自动走 gh-proxy 镜像加速，无需登录和代理；私有仓库自动使用已保存的 Token 直连</span></div>
     <div class="field"><label>保存位置</label>
       <div class="form-row">
         <input class="input" id="clone-path" placeholder="选择或输入本地目录" value="${esc(STATE.lastCloneDir || "")}">
@@ -1844,12 +1850,8 @@ function viewSettings(main) {
       <div class="card">
         <div class="setting-block">
           <h3>账号</h3>
-          <div id="account-state" style="display:flex;align-items:center;gap:10px;min-height:28px">
-            <span class="help">本地操作无需登录。推送/发布等联网操作会按需提示临时登录，操作完成后自动退出、不保持会话。</span>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <a class="btn btn-sm" href="#login">手动登录</a>
-            <button class="btn btn-sm" id="btn-manual-logout">退出登录</button>
+          <div id="account-state" style="display:flex;align-items:center;gap:10px;min-height:28px;flex-wrap:wrap">
+            <span class="help">正在读取…</span>
           </div>
         </div>
         <div class="setting-block">
@@ -1980,12 +1982,14 @@ function bindSettings() {
 }
 
 function renderAccountBlock() {
-  const btn = $("#btn-manual-logout");
-  if (!btn) return;
-  btn.onclick = async (e) => runBtn(e.target, async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    toast("已登出", "success");
-  });
+  const box = $("#account-state");
+  if (!box) return;
+  api("/api/auth/token").then((d) => {
+    box.innerHTML = d.token
+      ? `<span class="badge badge-g">已保存 Token：${esc(d.token)}</span>
+         <span class="help">仅本机使用；写操作（推送/发布）需要时自动带上，公开仓库无需 Token</span>`
+      : `<span class="help">尚未保存 Token。推送 / 发布等写操作需要时会提示输入；公开仓库的克隆、下载、查看无需 Token。</span>`;
+  }).catch(() => { box.innerHTML = `<span class="help">无法读取 Token 状态</span>`; });
 }
 
 /* ----- 登录视图 ----- */
@@ -1993,7 +1997,7 @@ function renderAccountBlock() {
 function viewLogin(main) {
   main.innerHTML = `
     <div class="view" style="max-width:520px">
-      <h1 class="view-title">登录 GitHub</h1>
+      <h1 class="view-title">保存 GitHub Token</h1>
       <form class="card setting-block" id="login-form">
         <div class="field">
           <label>Personal Access Token</label>
@@ -2004,11 +2008,11 @@ function viewLogin(main) {
             <a href="https://github.com/settings/tokens/new?scopes=repo,read:org" target="_blank">点此直达创建页</a>
           </span>
         </div>
-        <button class="btn btn-primary" type="submit">登录</button>
+        <button class="btn btn-primary" type="submit">保存</button>
       </form>
       <p class="help" style="margin-top:14px">
-        说明：本地操作（打开仓库、提交、回滚）无需登录。手动登录会保持到点击 [退出登录] 为止；
-        推送/发布时按需弹出的临时登录则在该次操作结束后自动退出。
+        说明：Token 只保存在本机（凭据管理器），供推送 / 发布等写操作使用；
+        公开仓库的克隆、下载、查看无需 Token。保存后可在设置页查看掩码形式。
       </p>
     </div>`;
   const prev = location.hash;
@@ -2017,8 +2021,8 @@ function viewLogin(main) {
     const btn = $("#login-form button[type=submit]");
     await runBtn(btn, async () => {
       const d = await api("/api/auth/login", { method: "POST", body: { token: $("#token").value } });
-      if (!d.ok) throw new Error(d.error || "登录失败");
-      toast(`登录成功，欢迎 ${d.username}`, "success");
+      if (!d.ok) throw new Error(d.error || "Token 校验失败");
+      toast(d.username ? `Token 已保存（${d.username}）` : "Token 已保存", "success");
       setTimeout(() => showView(prev === "#login" || !repo() ? "#welcome" : "#changes"), 600);
     });
   };

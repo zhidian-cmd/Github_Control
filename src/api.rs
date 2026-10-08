@@ -390,6 +390,21 @@ async fn auth_status() -> Response {
     ok(resp)
 }
 
+/// 已保存 token 的掩码形式（gh auth token 本地读凭据管理器，不联网）。
+/// 没有保存过 token 时返回空串，前端据此展示"尚未保存"提示。
+async fn auth_token_masked() -> Response {
+    let (rc, out) = runner::run_gh(&["auth".into(), "token".into()], Some(10.0)).await;
+    let t = if rc == 0 { out.trim().to_string() } else { String::new() };
+    let masked = if t.len() >= 12 && t.is_ascii() {
+        format!("{}****{}", &t[..4], &t[t.len() - 4..])
+    } else if !t.is_empty() {
+        "****".to_string()
+    } else {
+        String::new()
+    };
+    ok(json!({"ok": true, "token": masked}))
+}
+
 async fn auth_verify() -> Response {
     let state = credential::get_auth_state(true).await;
     let username = if state == "logged_in" {
@@ -1766,6 +1781,8 @@ fn spawn_clone_worker(
     target_path: String,
     log_path: std::path::PathBuf,
     env_map: HashMap<String, String>,
+    real_url: String,
+    via_mirror: bool,
 ) {
     {
         let mut jobs = clone_jobs().lock().unwrap();
@@ -1788,41 +1805,55 @@ fn spawn_clone_worker(
             Ok(f) => f,
             Err(_) => return,
         };
+        let mut args = args;
         let (mut rc, mut all_out) = clone_exec(&args, &env_map, timeout_secs, &mut f).await;
 
-        // 自动兜底：网络类失败时换链路（代理→直连）重试一次（恒开，诊断走测试按钮）
+        // 镜像克隆失败（404/401/被限流/网络等）：改用原始地址直连重试。
+        // 私有仓库在这一步靠 credential helper 自动带上已保存 token
+        // （helper 只对 github.com 生效，token 全程不会发给 gh-proxy）。
+        if rc != 0 && via_mirror {
+            let _ = writeln!(f, "[镜像] gh-proxy 克隆失败，改用原始地址直连重试…");
+            let _ = f.flush();
+            let n = args.len();
+            args[n - 2] = real_url.clone();
+            let (rc2, out2) =
+                clone_exec(&args, &env::clone_env(&real_url), timeout_secs, &mut f).await;
+            rc = rc2;
+            all_out = out2;
+        }
+
+        // 最后兜底：直连仍是网络类失败且配置了代理时，走代理救一次。
+        // 默认克隆链路（镜像/直连）不受代理设置影响，代理只出现在这里救命。
         if rc != 0 && net::is_net_hint(&all_out) {
-            let primary_proxy =
-                env_map.contains_key("HTTPS_PROXY") || env_map.contains_key("https_proxy");
-            let other = if primary_proxy {
-                Some(env::build_env_direct())
-            } else {
-                let u = crate::net::normalize_proxy_url(
-                    config::load_config(false)
-                        .pointer("/proxy/url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                );
-                if u.is_empty() {
-                    None
-                } else {
-                    Some(env::build_env_forced_proxy(&u))
-                }
-            };
-            if let Some(oenv) = other {
-                let via = if primary_proxy { "直连" } else { "代理" };
-                let _ = writeln!(f, "[自动兜底] 主链路网络失败，自动改走{via}重试…");
+            let u = crate::net::normalize_proxy_url(
+                config::load_config(false)
+                    .pointer("/proxy/url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            );
+            if !u.is_empty() {
+                let _ = writeln!(f, "[自动兜底] 直连网络失败，自动改走代理重试…");
                 let _ = f.flush();
-                let (rc2, out2) = clone_exec(&args, &oenv, timeout_secs, &mut f).await;
+                let (rc2, out2) =
+                    clone_exec(&args, &env::build_env_forced_proxy(&u), timeout_secs, &mut f).await;
+                rc = rc2;
+                all_out = out2;
                 if rc2 == 0 {
-                    let _ = writeln!(f, "[自动兜底] 已改走{via}重试成功");
-                    rc = rc2;
-                    all_out = format!("[自动兜底] 主链路网络失败，已自动改走{via}重试成功。\n{out2}");
+                    let _ = writeln!(f, "[自动兜底] 已改走代理重试成功");
                 }
             }
         }
 
         if rc == 0 {
+            // 镜像克隆成功时 origin 指向 gh-proxy，改回真实地址——
+            // 后续推送/发布/远程显示都必须用 github.com 原地址
+            if via_mirror {
+                let _ = runner::run_git_sync(
+                    &["remote".into(), "set-url".into(), "origin".into(), real_url.clone()],
+                    Some(&target_path),
+                    None,
+                );
+            }
             repositories::add_repo(&target_path, None, "");
             // clone 只给默认分支建了本地分支，其余远程头补建跟踪分支
             let (er_rc, er_out) = runner::run_git_sync(
@@ -1879,11 +1910,8 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
     if url.is_empty() || path.is_empty() {
         return ok(json!({"ok": false, "error": "请填写仓库地址和保存位置"}));
     }
-    if env::is_github_url(&url) {
-        if let Some(err) = net::proxy_preflight() {
-            return ok(json!({"ok": false, "error": err}));
-        }
-    }
+    // 克隆是特殊通道，不走代理：不做 proxy_preflight，代理设置不影响克隆
+    // （github.com 公开仓库自动改走 gh-proxy 镜像，见 spawn_clone_worker）。
 
     // 目标目录非空处理：clone 到子目录。
     // 先把"用户实际选择的目录"存下来——记忆必须存它，而不是拼接仓库名后的
@@ -1924,7 +1952,15 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         args.push("--no-single-branch".into());
     }
     let env_map = env::clone_env(&url);
-    args.push(url);
+    // github.com 仓库首选 gh-proxy 镜像克隆（匿名、直连、无代理，公开仓库无需登录）；
+    // 原始地址留作回退（credential helper 只对 github.com 生效，token 绝不发给镜像）。
+    let via_mirror = env::is_github_url(&url);
+    let primary = if via_mirror {
+        format!("https://gh-proxy.com/{url}")
+    } else {
+        url.clone()
+    };
+    args.push(primary);
     args.push(path.clone());
 
     let millis = std::time::SystemTime::now()
@@ -1933,7 +1969,7 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         .unwrap_or(0);
     let clone_id = millis.to_string();
     let log_path = paths::logs_dir().join(format!("clone_{clone_id}.log"));
-    spawn_clone_worker(clone_id.clone(), args, path.clone(), log_path, env_map);
+    spawn_clone_worker(clone_id.clone(), args, path.clone(), log_path, env_map, url, via_mirror);
     ok(json!({"ok": true, "clone_id": clone_id, "path": path, "redirected": redirected}))
 }
 
@@ -1989,6 +2025,7 @@ pub fn build_router() -> Router {
         .route("/api/native/pick_folder", post(native_pick_folder))
         .route("/api/native/pick_files", post(native_pick_files))
         .route("/api/auth/status", get(auth_status))
+        .route("/api/auth/token", get(auth_token_masked))
         .route("/api/auth/verify", get(auth_verify))
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/logout", post(auth_logout))
