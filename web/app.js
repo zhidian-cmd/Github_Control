@@ -271,6 +271,7 @@ const STATE = {
   status: null,        // active 仓库的 status
   commits: [],
   tab: "changes",      // changes | history
+  logBase: "",         // 历史独有过滤的基准分支（后端检测；空=当前分支全部历史）
   selFile: null,
   selCommit: null,
   filter: "",
@@ -278,7 +279,6 @@ const STATE = {
   uiExpanded: {},           // 每仓库的展开目录表（持久化到 config.json）
   lastCloneDir: "",         // 上次克隆的保存位置，下次打开克隆窗口自动填
   drafts: {},               // 每仓库的输入草稿 {repoPath: {summary, desc}}，重渲染不丢
-  graphData: null,          // 概览提交图缓存（图接口与概览接口并行加载的衔接）
 };
 
 const repo = () => STATE.active;
@@ -612,7 +612,7 @@ function renderSidebar() {
         <button class="active" data-tab="history">历史</button>
       </div>
       <div class="side-head" style="font-size:12px;color:var(--text-2)">
-        ${esc(s?.branch || "")} · 最近 50 条
+        ${esc(s?.branch || "")}${STATE.logBase ? `（相对 ${esc(STATE.logBase)} 独有）` : ""} · 最近 50 条
       </div>
       <div class="side-list" id="commit-list"></div>`;
     renderCommitList();
@@ -1181,8 +1181,6 @@ function viewOverview(main) {
     <h1 class="view-title">仓库概览</h1>
     <div id="ov-body"><div class="card"><div class="empty">加载中…</div></div></div>
   </div>`;
-  // 提交图先行加载（概览的开头区块），跟随文件改动侧栏所选分支
-  loadOverviewGraph();
   api(`/api/repo/overview?path=${encodeURIComponent(repo())}`).then((o) => {
     // 最近 7 天柱状图（纯 CSS）
     const days = [];
@@ -1200,11 +1198,6 @@ function viewOverview(main) {
       </div>`).join("");
 
     $("#ov-body").innerHTML = `
-      <div class="card setting-block" id="ov-graph" style="margin-bottom:12px">
-        <h3 style="display:flex;align-items:center;justify-content:space-between">提交图
-          <button class="btn btn-sm" id="g-reload">🔄 刷新</button></h3>
-        <div id="gview"><div class="empty">加载中…</div></div>
-      </div>
       <div class="ov-grid">
         <div class="card setting-block">
           <h3>基本信息</h3>
@@ -1232,34 +1225,9 @@ function viewOverview(main) {
         <div class="bar-chart">${chart}</div>
         <div class="help" style="margin-top:8px">总提交 ${o.total_commits} · 最后提交 ${o.last_commit_time ? relTime(o.last_commit_time) : "无"}</div>
       </div>`;
-    // 概览数据渲染完成后，若图还在加载中则补渲染；绑定刷新按钮
-    bindGraphReload();
-    if (STATE.graphData) renderGraph(STATE.graphData, $("#gview"));
   }).catch((e) => {
     $("#ov-body").innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
   });
-}
-
-/* 概览提交图：并行加载，完成后渲染进 #ov-graph（概览接口慢时不互相阻塞） */
-function loadOverviewGraph() {
-  const box = $("#gview");
-  if (!box) return;
-  STATE.graphData = null;
-  api(`/api/git/graph?path=${encodeURIComponent(repo())}&n=300`)
-    .then((d) => {
-      if (!d.ok) throw new Error(d.error || "加载失败");
-      STATE.graphData = d;
-      renderGraph(d, $("#gview"));  // 概览数据已就绪则立即渲染，否则等它
-    })
-    .catch((e) => {
-      const g = $("#gview");
-      if (g) g.innerHTML = `<div class="error-box" style="margin:0">${esc(e.message)}</div>`;
-    });
-}
-
-function bindGraphReload() {
-  const btn = $("#g-reload");
-  if (btn) btn.onclick = () => { loadOverviewGraph(); };
 }
 
 /* ----- 视图 B：文件改动详情 ----- */
@@ -1466,73 +1434,21 @@ function viewCommitDetail(main) {
 
 /* ----- 视图 D：历史表格 ----- */
 
-/* ----- 提交图（仓库概览内嵌；跟随文件改动侧栏的分支切换） ----- */
-
-const GRAPH_ROW_H = 28;
-const GRAPH_COLORS = 6;
-
-function gCurve(x1, y1, x2, y2) {
-  const bend = Math.min((y2 - y1) * 0.45, 38);
-  return `M${x1} ${y1} C${x1} ${y1 + bend},${x2} ${y2 - bend},${x2} ${y2}`;
-}
-
-/* 渲染提交图到指定容器（仓库概览内嵌）。
-   数据（泳道 x/y/边/颜色）由 Rust 端 /api/git/graph 完成布局。 */
-function renderGraph(d, box) {
-  if (!box) return;
-  const commits = d.commits || [];
-  if (!commits.length) {
-    box.innerHTML = `<div class="empty"><h3>还没有提交</h3><p>提交后会显示在这里</p></div>`;
-    return;
-  }
-  const width = d.width || 72;
-  const height = commits.length * GRAPH_ROW_H + 24;
-  const sel = STATE.selCommit;
-  const lanesSvg = (d.edges || []).map((e) =>
-    `<path d="${gCurve(e.x1, e.y1, e.x2, e.y2)}" stroke="var(--lane-${e.c})" stroke-width="1.6"
-      fill="none" opacity="0.8"${e.pending ? ` stroke-dasharray="4 4"` : ""}/>`).join("");
-  const nodesSvg = commits.map((c) => {
-    const col = `var(--lane-${c.lane % GRAPH_COLORS})`;
-    return `
-    <g class="gnode${c.hash === sel ? " sel" : ""}" data-hash="${esc(c.hash)}" transform="translate(${c.x} ${c.y})">
-      ${c.head ? `<circle r="9" fill="${col}" opacity="0.15"/>` : ""}
-      <circle r="${c.hash === sel ? 5.5 : 4}" fill="${c.hash === sel ? col : "var(--bg)"}" stroke="${col}" stroke-width="1.8"/>
-      <circle r="10" fill="transparent" stroke="none"/>  <!-- 命中热区：圆点小也容易点到 -->
-    </g>`;
-  }).join("");
-  const rows = commits.map((c, i) => {
-    const col = `var(--lane-${c.lane % GRAPH_COLORS})`;
-    const refs = (c.refs || []).map((r) =>
-      `<span class="gref ${r.kind}"${r.kind === "branch" ? ` style="color:${col};background:var(--lane-bg-${c.lane % GRAPH_COLORS})"` : ""}>${esc(r.name)}</span>`).join("");
-    return `
-    <div class="grow${c.hash === sel ? " selected" : ""}" data-hash="${esc(c.hash)}"
-      style="top:${i * GRAPH_ROW_H + 2}px;height:${GRAPH_ROW_H - 4}px;padding-left:${width + 8}px">
-      <span class="gmsg" title="${esc(c.msg)}">${esc(c.msg)}</span>
-      ${refs}
-      ${c.head ? `<span class="ghead">HEAD</span>` : ""}
-      <span class="gmeta">${esc(c.author)} · ${relTime(c.date)}</span>
-    </div>`;
-  }).join("");
-  box.innerHTML = `<div class="gscroll">
-    <div class="gcanvas" style="height:${height}px;min-width:${width + 330}px">
-      <svg class="glines" width="${width}" height="${height}" aria-hidden="true">${lanesSvg}${nodesSvg}</svg>
-      ${rows}
-    </div></div>`;
-  box.onclick = (e) => {
-    const hit = e.target.closest("[data-hash]");
-    if (!hit) return;
-    STATE.selCommit = hit.dataset.hash;
-    showView("#history");  // 跳到历史页的提交详情（该点所在分支历史下的提交）
-  };
-}
-
 function viewHistoryTable(main) {
+  const cur = STATE.status?.branch || "";
+  const base = STATE.logBase;
+  const scope = base
+    ? `仅显示支线 ${esc(cur)} 相对 ${esc(base)} 的独有提交（其余为各支线共享的历史，不重复列出）`
+    : "当前分支的全部历史（未找到 main/master 基准分支）";
   main.innerHTML = `<div class="view view-wide"><h1 class="view-title">提交历史</h1>
-    <div class="help" style="margin-bottom:10px">显示 [文件改动] 侧栏所选分支的历史；切分支请用文件改动页顶部的分支下拉</div>
+    <div class="help" style="margin-bottom:10px">${scope}；切支线请用 [文件改动] 页顶部的分支下拉</div>
     <div class="card" id="ht-body"></div></div>`;
   const rows = STATE.commits;
   if (!rows.length) {
-    $("#ht-body").innerHTML = `<div class="empty"><h3>还没有提交</h3><p>提交后会显示在这里</p></div>`;
+    const emptyMsg = base
+      ? `分支 ${esc(cur)} 相对 ${esc(base)} 还没有独有提交（可能与基准同步，或尚未开始改动）`
+      : "提交后会显示在这里";
+    $("#ht-body").innerHTML = `<div class="empty"><h3>没有可显示的提交</h3><p>${emptyMsg}</p></div>`;
     return;
   }
   $("#ht-body").innerHTML = `
@@ -1805,6 +1721,7 @@ async function afterRepoReady(path) {
   api("/api/repo/activate", { method: "POST", body: { path } }).catch(() => {});  // 持久化：下次启动回到这个仓库
   STATE.status = null;
   STATE.commits = [];
+  STATE.logBase = "";
   STATE.selFile = null;
   STATE.selCommit = null;
   STATE.filter = "";
@@ -2182,6 +2099,7 @@ async function refreshAll() {
     .then((lc) => {
       if (gen !== refreshGen) return;
       STATE.commits = lc.commits.map((c) => ({ ...c }));
+      STATE.logBase = lc.base || "";  // 支线独有过滤所用基准（空=当前分支全部历史）
       renderAll();
     })
     .catch(() => { if (gen === refreshGen) renderAll(); });
@@ -2270,6 +2188,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         api(`/api/git/log_table?path=${encodeURIComponent(STATE.active)}&n=50`)
           .then((lc) => {
             STATE.commits = lc.commits.map((c) => ({ ...c }));
+            STATE.logBase = lc.base || "";
             renderAll();
           })
           .catch(() => {});

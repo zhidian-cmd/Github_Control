@@ -1273,11 +1273,11 @@ async fn git_commit_stats(Query(q): Query<Q>) -> Response {
 /// 提交历史 numstat 缓存：按 (repo, branch, n) 键 + 分支 tip 校验。
 /// 指定分支时校验该分支 tip（rev-parse 分支名），tip 未变则历史必然不变
 /// （工作区改动不影响已提交的 numstat），直接返回缓存；变了才重跑 git log。
-/// branch 为空 = 当前 HEAD。
-static LOG_TABLE_CACHE: OnceLock<Mutex<HashMap<(String, String, i64), (String, Vec<Value>)>>> =
+/// branch 为空 = 当前 HEAD。返回 (commits, base)，base = 支线独有过滤所用的基准。
+static LOG_TABLE_CACHE: OnceLock<Mutex<HashMap<(String, String, i64), (String, (Vec<Value>, Option<String>))>>> =
     OnceLock::new();
 
-async fn cached_log_table(repo: &str, n: i64, branch: &str) -> Vec<Value> {
+async fn cached_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Option<String>) {
     // 安全：branch 以 '-' 开头会被 git 当作选项解析，拒绝即可（正常分支名不会）
     let branch = if branch.starts_with('-') { "" } else { branch };
     let rev = if branch.is_empty() { "HEAD" } else { branch };
@@ -1288,39 +1288,27 @@ async fn cached_log_table(repo: &str, n: i64, branch: &str) -> Vec<Value> {
     let cache = LOG_TABLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let guard = cache.lock().unwrap();
-        if let Some((h, commits)) = guard.get(&key) {
+        if let Some((h, data)) = guard.get(&key) {
             if *h == tip {
-                return commits.clone();
+                return data.clone();
             }
         }
     }
-    let commits = git_repo::get_log_table(repo, n, branch).await;
+    let data = git_repo::get_log_table(repo, n, branch).await;
     let mut guard = cache.lock().unwrap();
     if guard.len() >= 32 {
         guard.clear();
     }
-    guard.insert(key, (tip, commits.clone()));
-    commits
+    guard.insert(key, (tip, data.clone()));
+    data
 }
 
 async fn git_log_table(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
     let n = q.n.unwrap_or_else(|| "50".into()).parse::<i64>().unwrap_or(50);
     let branch = q.branch.unwrap_or_default();
-    ok(json!({"ok": true, "commits": cached_log_table(&repo, n, &branch).await}))
-}
-
-/// 全分支提交图（lane 布局在 Rust 侧完成，前端只画 SVG）
-async fn git_graph(Query(q): Query<Q>) -> Response {
-    let repo = q.path.unwrap_or_default();
-    let n = q.n.unwrap_or_else(|| "300".into()).parse::<i64>().unwrap_or(300).clamp(10, 1000);
-    match git_repo::get_graph(&repo, n).await {
-        Ok(mut v) => {
-            v["ok"] = json!(true);
-            ok(v)
-        }
-        Err(e) => ok(json!({"ok": false, "error": e})),
-    }
+    let (commits, base) = cached_log_table(&repo, n, &branch).await;
+    ok(json!({"ok": true, "commits": commits, "base": base}))
 }
 
 async fn git_branches(Query(q): Query<Q>) -> Response {
@@ -2075,7 +2063,6 @@ pub fn build_router() -> Router {
         .route("/api/git/file_stats", get(git_file_stats))
         .route("/api/git/commit_stats", get(git_commit_stats))
         .route("/api/git/log_table", get(git_log_table))
-        .route("/api/git/graph", get(git_graph))
         .route("/api/git/branches", get(git_branches))
         .route("/api/git/in_progress", get(git_in_progress))
         .route("/api/git/in_progress_op", post(git_in_progress_op))
