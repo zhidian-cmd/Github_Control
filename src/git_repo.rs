@@ -552,10 +552,14 @@ pub async fn get_commit_stats(repo: &str, commit: &str) -> Result<Value, String>
 }
 
 /// 历史表格数据：一次 git log --numstat 拿全部提交的增删统计。
-/// branch 为空 = 当前 HEAD；否则查看指定分支的历史（各分支历史相互独立）。
+/// --first-parent 只沿当前分支第一父链走：merge 进来的其他分支提交
+/// 不会混入（各支线历史严格分开，切分支后只看到本支线的提交）。
+/// branch 为空 = 当前 HEAD；否则查看指定分支的历史。
 pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> Vec<Value> {
     let branch = if branch.starts_with('-') { "" } else { branch };
-    let mut args = vec!["log".into(), "--numstat".into(), "-M".into()];
+    let mut args = vec![
+        "log".into(), "--first-parent".into(), "--numstat".into(), "-M".into(),
+    ];
     if !branch.is_empty() {
         args.push(branch.to_string());
     }
@@ -650,11 +654,13 @@ pub async fn get_graph(repo: &str, n: i64) -> Result<Value, String> {
         }
     }
 
-    // 提交：topo+date 序，当前分支（HEAD）。切换分支（checkout）后 HEAD 变，
-    // 图自然只显示对应分支的提交；分叉/合并线由 merge 提交的父指针呈现
+    // 提交：topo+date 序，当前分支第一父链（--first-parent）。
+    // 切换分支（checkout）后 HEAD 变，图自然只显示对应分支的提交；
+    // merge 进来的其他支线提交不混入，各支线历史严格分开
     let (lrc, lout) = runner::run_git(
         &[
-            "log".into(), "--topo-order".into(), "--date-order".into(),
+            "log".into(), "--first-parent".into(),
+            "--topo-order".into(), "--date-order".into(),
             "-n".into(), n.to_string(),
             "--format=%H%x00%P%x00%an%x00%cI%x00%s".into(),
             "HEAD".into(),
