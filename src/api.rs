@@ -37,6 +37,7 @@ pub struct Q {
     pub n: Option<String>,
     pub id: Option<String>,
     pub name: Option<String>,
+    pub branch: Option<String>,
 }
 
 // ---------------- 全局状态 ----------------
@@ -1269,38 +1270,44 @@ async fn git_commit_stats(Query(q): Query<Q>) -> Response {
     }
 }
 
-/// 提交历史 numstat 缓存：按 (repo, n) 键 + HEAD 校验。
-/// HEAD 未变时历史数据必然不变（工作区改动不影响已提交的 numstat），
-/// 直接返回缓存；HEAD 变了才重跑 git log --numstat。
-static LOG_TABLE_CACHE: OnceLock<Mutex<HashMap<(String, i64), (String, Vec<Value>)>>> = OnceLock::new();
+/// 提交历史 numstat 缓存：按 (repo, branch, n) 键 + 分支 tip 校验。
+/// 指定分支时校验该分支 tip（rev-parse 分支名），tip 未变则历史必然不变
+/// （工作区改动不影响已提交的 numstat），直接返回缓存；变了才重跑 git log。
+/// branch 为空 = 当前 HEAD。
+static LOG_TABLE_CACHE: OnceLock<Mutex<HashMap<(String, String, i64), (String, Vec<Value>)>>> =
+    OnceLock::new();
 
-async fn cached_log_table(repo: &str, n: i64) -> Vec<Value> {
-    // HEAD 快查（rev-parse 是毫秒级，远便宜于 log --numstat）
-    let (hrc, hout) = runner::run_git(&["rev-parse".into(), "HEAD".into()], Some(repo), None).await;
-    let head = if hrc == 0 { hout.trim().to_string() } else { String::new() };
-    let key = (repo.to_string(), n);
+async fn cached_log_table(repo: &str, n: i64, branch: &str) -> Vec<Value> {
+    // 安全：branch 以 '-' 开头会被 git 当作选项解析，拒绝即可（正常分支名不会）
+    let branch = if branch.starts_with('-') { "" } else { branch };
+    let rev = if branch.is_empty() { "HEAD" } else { branch };
+    // tip 快查（rev-parse 是毫秒级，远便宜于 log --numstat）
+    let (hrc, hout) = runner::run_git(&["rev-parse".into(), rev.into()], Some(repo), None).await;
+    let tip = if hrc == 0 { hout.trim().to_string() } else { String::new() };
+    let key = (repo.to_string(), branch.to_string(), n);
     let cache = LOG_TABLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let guard = cache.lock().unwrap();
         if let Some((h, commits)) = guard.get(&key) {
-            if *h == head {
+            if *h == tip {
                 return commits.clone();
             }
         }
     }
-    let commits = git_repo::get_log_table(repo, n).await;
+    let commits = git_repo::get_log_table(repo, n, branch).await;
     let mut guard = cache.lock().unwrap();
     if guard.len() >= 32 {
         guard.clear();
     }
-    guard.insert(key, (head, commits.clone()));
+    guard.insert(key, (tip, commits.clone()));
     commits
 }
 
 async fn git_log_table(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
     let n = q.n.unwrap_or_else(|| "50".into()).parse::<i64>().unwrap_or(50);
-    ok(json!({"ok": true, "commits": cached_log_table(&repo, n).await}))
+    let branch = q.branch.unwrap_or_default();
+    ok(json!({"ok": true, "commits": cached_log_table(&repo, n, &branch).await}))
 }
 
 async fn git_branches(Query(q): Query<Q>) -> Response {

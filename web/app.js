@@ -278,6 +278,7 @@ const STATE = {
   uiExpanded: {},           // 每仓库的展开目录表（持久化到 config.json）
   lastCloneDir: "",         // 上次克隆的保存位置，下次打开克隆窗口自动填
   drafts: {},               // 每仓库的输入草稿 {repoPath: {summary, desc}}，重渲染不丢
+  histBranch: "",           // 历史视图正在查看的分支（"" = 当前分支），各分支历史独立展示
 };
 
 const repo = () => STATE.active;
@@ -611,7 +612,7 @@ function renderSidebar() {
         <button class="active" data-tab="history">历史</button>
       </div>
       <div class="side-head" style="font-size:12px;color:var(--text-2)">
-        ${esc(s?.branch || "")} · 最近 50 条
+        ${esc(STATE.histBranch || s?.branch || "")} · 最近 50 条
       </div>
       <div class="side-list" id="commit-list"></div>`;
     renderCommitList();
@@ -1342,8 +1343,11 @@ function renderWordDiffText(text) {
 /* ----- 视图 C：提交详情（表格 + 行内 diff） ----- */
 
 function viewCommitDetail(main) {
+  const otherBranchView = !!(STATE.histBranch && STATE.histBranch !== (STATE.status?.branch || ""));
   main.innerHTML = `<div class="view view-wide cd-view">
-    <div id="commit-detail" class="cd-wrap"><div class="empty">加载中…</div></div></div>`;
+    <div id="commit-detail" class="cd-wrap"><div class="empty">加载中…</div></div></div>
+    ${otherBranchView ? `<div class="help" style="margin-top:10px">正在查看分支 ${esc(STATE.histBranch)} 的历史（非当前分支），仅供浏览。</div>` : ""}
+  `;
   api(`/api/git/commit_stats?path=${encodeURIComponent(repo())}&commit=${encodeURIComponent(STATE.selCommit)}`)
     .then((c) => {
       $("#commit-detail").innerHTML = `
@@ -1353,7 +1357,8 @@ function viewCommitDetail(main) {
               <h2>${esc(c.msg)}</h2>
               <div class="meta"><span class="mono">${esc(c.hash)}</span> · ${esc(c.author)} · ${esc(c.date)}（${relTime(c.date)}）</div>
             </div>
-            <button class="btn" id="btn-rollback">回退到此提交</button>
+            ${otherBranchView ? `<span class="help" title="正在查看其他分支的历史；回退作用于当前分支，请切回该分支后再操作">仅浏览 · 回退请在当前分支操作</span>`
+              : `<button class="btn" id="btn-rollback">回退到此提交</button>`}
           </div>
         </div>
         <div class="cd-3col">
@@ -1365,7 +1370,7 @@ function viewCommitDetail(main) {
           </div>
           <div class="cd-preview" id="cd-preview"><div class="empty"><h3>点击左侧文件查看改动</h3><p>或点「全部改动」看整个提交的 patch</p></div></div>
         </div>`;
-      $("#btn-rollback").onclick = () => openRollback(STATE.commits.findIndex((x) => x.hash === c.hash));
+      if (!otherBranchView) $("#btn-rollback").onclick = () => openRollback(STATE.commits.findIndex((x) => x.hash === c.hash));
 
       const preview = $("#cd-preview");
       let selRow = null;
@@ -1432,14 +1437,61 @@ function viewCommitDetail(main) {
 /* ----- 视图 D：历史表格 ----- */
 
 function viewHistoryTable(main) {
-  main.innerHTML = `<div class="view view-wide"><h1 class="view-title">提交历史</h1>
+  main.innerHTML = `<div class="view view-wide">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h1 class="view-title" style="margin:0">提交历史</h1>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="help">分支</span>
+        <select class="input" id="ht-branch" style="width:auto;min-width:150px">
+          <option value="">当前分支</option>
+        </select>
+      </div>
+    </div>
     <div class="card" id="ht-body"></div></div>`;
-  const rows = STATE.commits;
+
+  // 分支下拉：列出本地所有分支，各分支历史独立查看
+  api(`/api/git/branches?path=${encodeURIComponent(repo())}`)
+    .then((d) => {
+      const sel = $("#ht-branch");
+      if (!sel) return;
+      const cur = STATE.status?.branch || "";
+      sel.innerHTML = d.branches.map((b) =>
+        `<option value="${esc(b.name)}"${(STATE.histBranch || cur) === b.name ? " selected" : ""}>${esc(b.name)}${b.current ? "（当前）" : ""}</option>`
+      ).join("") || `<option value="">当前分支</option>`;
+      sel.onchange = () => {
+        STATE.histBranch = sel.value;
+        STATE.selCommit = null;
+        loadHtRows();
+      };
+    })
+    .catch(() => {});
+
+  loadHtRows();
+}
+
+async function loadHtRows() {
+  const body = $("#ht-body");
+  if (!body) return;
+  body.innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const d = await api(`/api/git/log_table?path=${encodeURIComponent(repo())}&n=50&branch=${encodeURIComponent(STATE.histBranch)}`);
+    renderHtRows(d.commits || []);
+    renderSidebar();  // 侧栏最近提交列表跟随所选分支
+  } catch (e) {
+    body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
+  }
+}
+
+function renderHtRows(rows) {
+  const body = $("#ht-body");
+  if (!body) return;
+  STATE.commits = rows;
+  const other = STATE.histBranch && STATE.histBranch !== (STATE.status?.branch || "");
   if (!rows.length) {
-    $("#ht-body").innerHTML = `<div class="empty"><h3>还没有提交</h3><p>提交后会显示在这里</p></div>`;
+    body.innerHTML = `<div class="empty"><h3>还没有提交</h3><p>${other ? `分支 ${esc(STATE.histBranch)} 上还没有提交` : "提交后会显示在这里"}</p></div>`;
     return;
   }
-  $("#ht-body").innerHTML = `
+  body.innerHTML = `
     <table class="ht-table">
       <thead><tr><th>Hash</th><th>消息</th><th>作者</th><th>时间</th><th>改动</th></tr></thead>
       <tbody>
@@ -1453,7 +1505,7 @@ function viewHistoryTable(main) {
           </tr>`).join("")}
       </tbody>
     </table>`;
-  $("#ht-body").onclick = (e) => {
+  body.onclick = (e) => {
     const tr = e.target.closest("tr[data-hash]");
     if (!tr) return;
     STATE.selCommit = tr.dataset.hash;
@@ -1709,6 +1761,7 @@ async function afterRepoReady(path) {
   api("/api/repo/activate", { method: "POST", body: { path } }).catch(() => {});  // 持久化：下次启动回到这个仓库
   STATE.status = null;
   STATE.commits = [];
+  STATE.histBranch = "";  // 历史分支选择不跨仓库记忆
   STATE.selFile = null;
   STATE.selCommit = null;
   STATE.filter = "";
@@ -2082,7 +2135,7 @@ async function refreshAll() {
       toast(e.message, "error");
       renderAll();
     });
-  const applyLog = api(`/api/git/log_table?path=${encodeURIComponent(repo())}&n=50`)
+  const applyLog = api(`/api/git/log_table?path=${encodeURIComponent(repo())}&n=50&branch=${encodeURIComponent(STATE.histBranch)}`)
     .then((lc) => {
       if (gen !== refreshGen) return;
       STATE.commits = lc.commits.map((c) => ({ ...c }));
@@ -2171,7 +2224,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const st = await api(`/api/repo/status_hardcore?path=${encodeURIComponent(STATE.active)}`);
         applyHardcore(st);
         syncRemoteFromStatus({ remote: st.remote || "" });
-        api(`/api/git/log_table?path=${encodeURIComponent(STATE.active)}&n=50`)
+        api(`/api/git/log_table?path=${encodeURIComponent(STATE.active)}&n=50&branch=${encodeURIComponent(STATE.histBranch)}`)
           .then((lc) => {
             STATE.commits = lc.commits.map((c) => ({ ...c }));
             renderAll();

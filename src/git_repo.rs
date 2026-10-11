@@ -551,18 +551,19 @@ pub async fn get_commit_stats(repo: &str, commit: &str) -> Result<Value, String>
     Ok(result)
 }
 
-/// 历史表格数据：一次 git log --numstat 拿全部提交的增删统计
-pub async fn get_log_table(repo: &str, n: i64) -> Vec<Value> {
-    let (rc, out) = runner::run_git(
-        &[
-            "log".into(), "--numstat".into(), "-M".into(),
-            "--pretty=format:\x01%H|%an|%cI|%s".into(),
-            "-n".into(), n.to_string(),
-        ],
-        Some(repo),
-        None,
-    )
-    .await;
+/// 历史表格数据：一次 git log --numstat 拿全部提交的增删统计。
+/// branch 为空 = 当前 HEAD；否则查看指定分支的历史（各分支历史相互独立）。
+pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> Vec<Value> {
+    let branch = if branch.starts_with('-') { "" } else { branch };
+    let mut args = vec!["log".into(), "--numstat".into(), "-M".into()];
+    if !branch.is_empty() {
+        args.push(branch.to_string());
+    }
+    args.extend([
+        "--pretty=format:\x01%H|%an|%cI|%s".into(),
+        "-n".into(), n.to_string(),
+    ]);
+    let (rc, out) = runner::run_git(&args, Some(repo), None).await;
     if rc != 0 {
         return vec![];
     }
