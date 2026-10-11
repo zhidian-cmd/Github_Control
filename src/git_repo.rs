@@ -4,7 +4,7 @@ use crate::paths;
 use crate::runner;
 use regex::Regex;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub const MAX_DIFF: usize = 300 * 1024; // 300KB，防止前端卡死
 
@@ -597,4 +597,185 @@ pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> Vec<Value> {
         }
     }
     commits
+}
+
+// ---------------- 提交图（lane 布局移植自 oil-git src/graph.ts） ----------------
+
+const GRAPH_ROW_H: f64 = 28.0;   // 每行高度（oil-git 56，这里紧凑一倍）
+const GRAPH_LANE_W: f64 = 20.0;  // 泳道宽度
+const GRAPH_COLORS: usize = 6;   // 颜色循环数（前端 --lane-0..5）
+
+/// 全分支提交图：branches+remotes+tags+HEAD 最近 n 条提交，
+/// Rust 侧完成泳道分配（oil-git layoutGraph 算法），前端只画 SVG。
+/// 返回 {head, width, commits:[{...refs,lane,x,y}], edges:[{x1,y1,x2,y2,c,pending}]}。
+pub async fn get_graph(repo: &str, n: i64) -> Result<Value, String> {
+    // HEAD（当前 checkout，占 0 号泳道）
+    let (hrc, hout) = runner::run_git(&["rev-parse".into(), "HEAD".into()], Some(repo), None).await;
+    let head = if hrc == 0 { hout.trim().to_string() } else { String::new() };
+
+    // refs：本地分支 / 远程分支 / 标签（for-each-ref 毫秒级）。
+    // %(*objectname) 是 peel 后的 commit：annotated tag 的 objectname 是 tag 对象
+    // 本身，直接用会挂不到提交上（oil-git 同款处理：peel 优先，否则裸 objectname）
+    let (rrc, rout) = runner::run_git(
+        &[
+            "for-each-ref".into(),
+            "--format=%(refname)%00%(objectname)%00%(*objectname)".into(),
+            "refs/heads".into(), "refs/remotes".into(), "refs/tags".into(),
+        ],
+        Some(repo),
+        None,
+    )
+    .await;
+    let mut refs: Vec<(String, String, String)> = Vec::new(); // (hash, name, kind)
+    if rrc == 0 {
+        for line in rout.lines() {
+            let p: Vec<&str> = line.split('\u{0}').collect();
+            if p.len() != 3 {
+                continue;
+            }
+            let (full, hash) = (p[0], if p[2].is_empty() { p[1] } else { p[2] });
+            let (name, kind) = if let Some(nm) = full.strip_prefix("refs/heads/") {
+                (nm.to_string(), "branch")
+            } else if let Some(nm) = full.strip_prefix("refs/tags/") {
+                (nm.to_string(), "tag")
+            } else if let Some(nm) = full.strip_prefix("refs/remotes/") {
+                if nm.ends_with("/HEAD") {
+                    continue; // origin/HEAD 无展示价值
+                }
+                (nm.to_string(), "remote")
+            } else {
+                continue;
+            };
+            refs.push((hash.to_string(), name, kind.to_string()));
+        }
+    }
+
+    // 提交：topo+date 序，全分支（oil-git history 的 reference="all" 取法）
+    let (lrc, lout) = runner::run_git(
+        &[
+            "log".into(), "--topo-order".into(), "--date-order".into(),
+            "--branches".into(), "--remotes".into(), "--tags".into(),
+            "-n".into(), n.to_string(),
+            "--format=%H%x00%P%x00%an%x00%cI%x00%s".into(),
+            "--".into(),
+        ],
+        Some(repo),
+        None,
+    )
+    .await;
+    if lrc != 0 {
+        // 空仓库（还没有任何提交）：返回空图而不是报错
+        return Ok(json!({"head": head, "width": 72, "commits": [], "edges": []}));
+    }
+
+    struct RawCommit {
+        hash: String,
+        parents: Vec<String>,
+        author: String,
+        date: String,
+        msg: String,
+    }
+    let mut raw: Vec<RawCommit> = Vec::new();
+    for line in lout.lines() {
+        let p: Vec<&str> = line.split('\u{0}').collect();
+        if p.len() < 5 {
+            continue;
+        }
+        raw.push(RawCommit {
+            hash: p[0].to_string(),
+            parents: p[1].split_whitespace().map(String::from).collect(),
+            author: p[2].to_string(),
+            date: p[3].to_string(),
+            msg: p[4].to_string(),
+        });
+    }
+    if raw.is_empty() {
+        return Ok(json!({"head": head, "width": 72, "commits": [], "edges": []}));
+    }
+
+    // ---- lane 分配（oil-git layoutGraph 核心移植）----
+    // lanes[i] = Some(hash) 表示该泳道"将流向"这个提交；None = 空槽可复用
+    let mut lanes: Vec<Option<String>> = if head.is_empty() { vec![] } else { vec![Some(head.clone())] };
+    let mut positions: HashMap<String, (f64, f64, usize)> = HashMap::new(); // hash → (x, y, lane)
+    let mut max_lane = 0usize;
+    let reserve = |lanes: &mut Vec<Option<String>>, hash: &str, max_lane: &mut usize| -> usize {
+        if let Some(i) = lanes.iter().position(|l| l.as_deref() == Some(hash)) {
+            return i;
+        }
+        let i = match lanes.iter().position(|l| l.is_none()) {
+            Some(i) => {
+                lanes[i] = Some(hash.to_string());
+                i
+            }
+            None => {
+                lanes.push(Some(hash.to_string()));
+                lanes.len() - 1
+            }
+        };
+        *max_lane = (*max_lane).max(i);
+        i
+    };
+    let mut rows: Vec<Value> = Vec::with_capacity(raw.len());
+    for (index, c) in raw.iter().enumerate() {
+        let lane = reserve(&mut lanes, &c.hash, &mut max_lane);
+        let x = 20.0 + lane as f64 * GRAPH_LANE_W;
+        let y = index as f64 * GRAPH_ROW_H + GRAPH_ROW_H / 2.0;
+        positions.insert(c.hash.clone(), (x, y, lane));
+        lanes[lane] = None;
+        // 第一个父提交继承本泳道，其余父提交另开泳道（分叉线）
+        for (i, parent) in c.parents.iter().enumerate() {
+            if lanes.iter().any(|l| l.as_deref() == Some(parent.as_str())) {
+                continue;
+            }
+            if i == 0 && lanes[lane].is_none() {
+                lanes[lane] = Some(parent.clone());
+            } else {
+                reserve(&mut lanes, parent, &mut max_lane);
+            }
+        }
+        let short: String = c.hash.chars().take(7).collect();
+        let crefs: Vec<Value> = refs
+            .iter()
+            .filter(|(h, _, _)| h == &c.hash)
+            .map(|(_, name, kind)| json!({"name": name, "kind": kind}))
+            .collect();
+        rows.push(json!({
+            "hash": c.hash, "short": short,
+            "author": c.author, "date": c.date, "msg": c.msg,
+            "lane": lane, "x": x, "y": y,
+            "head": c.hash == head,
+            "refs": crefs,
+        }));
+    }
+
+    // ---- 边（贝塞尔端点）----
+    // 父提交不在取回范围（被 -n 截断）→ pending 虚线延伸到列表末尾
+    let mut continuations: HashMap<String, f64> = HashMap::new(); // hash → x
+    for (i, l) in lanes.iter().enumerate() {
+        if let Some(h) = l {
+            continuations.insert(h.clone(), 20.0 + i as f64 * GRAPH_LANE_W);
+        }
+    }
+    let bottom_y = raw.len() as f64 * GRAPH_ROW_H + 16.0;
+    let mut edges: Vec<Value> = Vec::new();
+    for c in &raw {
+        let Some(&(x1, y1, lane)) = positions.get(&c.hash) else { continue };
+        for parent in &c.parents {
+            let (x2, y2, pending) = match positions.get(parent) {
+                Some(&(x, y, _)) => (x, y, false),
+                None => (
+                    continuations.get(parent).copied().unwrap_or(x1),
+                    bottom_y,
+                    true,
+                ),
+            };
+            edges.push(json!({
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "c": lane % GRAPH_COLORS, "pending": pending,
+            }));
+        }
+    }
+
+    let width = (72.0f64).max((max_lane + 1) as f64 * GRAPH_LANE_W + 20.0);
+    Ok(json!({"head": head, "width": width, "commits": rows, "edges": edges}))
 }

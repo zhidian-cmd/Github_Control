@@ -270,7 +270,7 @@ const STATE = {
   active: "",          // 当前仓库路径
   status: null,        // active 仓库的 status
   commits: [],
-  tab: "changes",      // changes | history
+  tab: "graph",        // graph | changes | history（打开仓库默认看提交图）
   selFile: null,
   selCommit: null,
   filter: "",
@@ -278,7 +278,7 @@ const STATE = {
   uiExpanded: {},           // 每仓库的展开目录表（持久化到 config.json）
   lastCloneDir: "",         // 上次克隆的保存位置，下次打开克隆窗口自动填
   drafts: {},               // 每仓库的输入草稿 {repoPath: {summary, desc}}，重渲染不丢
-  histBranch: "",           // 历史视图正在查看的分支（"" = 当前分支），各分支历史独立展示
+  selFrom: "history",       // 提交详情来源：history=历史表格（可回退）| graph=提交图（纯浏览）
 };
 
 const repo = () => STATE.active;
@@ -548,6 +548,7 @@ function renderSidebar() {
     $("#sidebar").innerHTML = `
       <div class="tabs">
         <button class="active" data-tab="changes">文件改动</button>
+        <button data-tab="graph">提交图</button>
         <button data-tab="history">历史</button>
       </div>
       ${ipLabel ? `<div class="banner banner-danger ip-banner">
@@ -605,17 +606,32 @@ function renderSidebar() {
     const sum = $("#commit-summary"), desc = $("#commit-desc");
     sum?.addEventListener("input", () => saveDraft("summary", sum.value));
     desc?.addEventListener("input", () => saveDraft("desc", desc.value));
-  } else {
+  } else if (STATE.tab === "history") {
     $("#sidebar").innerHTML = `
       <div class="tabs">
         <button data-tab="changes">文件改动</button>
+        <button data-tab="graph">提交图</button>
         <button class="active" data-tab="history">历史</button>
       </div>
       <div class="side-head" style="font-size:12px;color:var(--text-2)">
-        ${esc(STATE.histBranch || s?.branch || "")} · 最近 50 条
+        ${esc(s?.branch || "")} · 最近 50 条
       </div>
       <div class="side-list" id="commit-list"></div>`;
     renderCommitList();
+  } else if (STATE.tab === "graph") {
+    $("#sidebar").innerHTML = `
+      <div class="tabs">
+        <button data-tab="changes">文件改动</button>
+        <button class="active" data-tab="graph">提交图</button>
+        <button data-tab="history">历史</button>
+      </div>
+      <div class="side-head" style="font-size:12px;color:var(--text-2)">
+        所有分支 · 最近 300 条
+      </div>
+      <div class="help" style="padding:0 12px;font-size:12px;line-height:1.6">
+        每个点是一个提交，连线颜色区分分支线。点击点或行查看该提交详情；
+        当前分支切换在 [文件改动] 页顶部的分支下拉。
+      </div>`;
   }
 
   const newList = $(".side-list");
@@ -625,7 +641,7 @@ function renderSidebar() {
     STATE.tab = b.dataset.tab;
     STATE.selFile = null;
     STATE.selCommit = null;
-    showView(STATE.tab === "changes" ? "#changes" : "#history");
+    showView({ changes: "#changes", graph: "#graph", history: "#history" }[STATE.tab] || "#changes");
     renderSidebar();
   });
 }
@@ -1119,7 +1135,8 @@ let _mainSig = "";
 
 function renderMain() {
   // 同视图 + 同选中 + 同数据代数 → 跳过，避免启动/刷新时重复请求（如 overview 拉两次）
-  const view = location.hash || (repo() ? "#changes" : "#welcome");
+  const view = location.hash
+    || (repo() ? { graph: "#graph", changes: "#changes", history: "#history" }[STATE.tab] || "#changes" : "#welcome");
   const sig = [view, STATE.selFile, STATE.selCommit, refreshGen].join("|");
   if (sig === _mainSig) return;
   _mainSig = sig;
@@ -1151,6 +1168,8 @@ function _renderMainInner(view, main) {
   };
   if (view === "#changes") {
     (STATE.selFile ? viewFileDetail : viewOverview)(main);
+  } else if (view === "#graph") {
+    viewGraph(main);
   } else if (view === "#history") {
     (STATE.selCommit ? viewCommitDetail : viewHistoryTable)(main);
   } else {
@@ -1343,10 +1362,10 @@ function renderWordDiffText(text) {
 /* ----- 视图 C：提交详情（表格 + 行内 diff） ----- */
 
 function viewCommitDetail(main) {
-  const otherBranchView = !!(STATE.histBranch && STATE.histBranch !== (STATE.status?.branch || ""));
+  const pureBrowse = STATE.selFrom === "graph";
   main.innerHTML = `<div class="view view-wide cd-view">
     <div id="commit-detail" class="cd-wrap"><div class="empty">加载中…</div></div></div>
-    ${otherBranchView ? `<div class="help" style="margin-top:10px">正在查看分支 ${esc(STATE.histBranch)} 的历史（非当前分支），仅供浏览。</div>` : ""}
+    ${pureBrowse ? `<div class="help" style="margin-top:10px">从提交图进入（可能属于其他分支），仅供浏览；回退请在 [历史] 页对当前分支的提交操作。</div>` : ""}
   `;
   api(`/api/git/commit_stats?path=${encodeURIComponent(repo())}&commit=${encodeURIComponent(STATE.selCommit)}`)
     .then((c) => {
@@ -1357,7 +1376,7 @@ function viewCommitDetail(main) {
               <h2>${esc(c.msg)}</h2>
               <div class="meta"><span class="mono">${esc(c.hash)}</span> · ${esc(c.author)} · ${esc(c.date)}（${relTime(c.date)}）</div>
             </div>
-            ${otherBranchView ? `<span class="help" title="正在查看其他分支的历史；回退作用于当前分支，请切回该分支后再操作">仅浏览 · 回退请在当前分支操作</span>`
+            ${pureBrowse ? `<span class="help" title="从提交图进入，可能属于其他分支；回退作用于当前分支，请在历史页操作">仅浏览</span>`
               : `<button class="btn" id="btn-rollback">回退到此提交</button>`}
           </div>
         </div>
@@ -1370,7 +1389,7 @@ function viewCommitDetail(main) {
           </div>
           <div class="cd-preview" id="cd-preview"><div class="empty"><h3>点击左侧文件查看改动</h3><p>或点「全部改动」看整个提交的 patch</p></div></div>
         </div>`;
-      if (!otherBranchView) $("#btn-rollback").onclick = () => openRollback(STATE.commits.findIndex((x) => x.hash === c.hash));
+      if (!STATE.selFrom || STATE.selFrom === "history") $("#btn-rollback").onclick = () => openRollback(STATE.commits.findIndex((x) => x.hash === c.hash));
 
       const preview = $("#cd-preview");
       let selRow = null;
@@ -1436,62 +1455,91 @@ function viewCommitDetail(main) {
 
 /* ----- 视图 D：历史表格 ----- */
 
-function viewHistoryTable(main) {
+/* ----- 视图 B：提交图（全分支泳道图；lane 布局由 Rust 端移植 oil-git 完成） ----- */
+
+const GRAPH_ROW_H = 28;
+const GRAPH_COLORS = 6;
+
+function gCurve(x1, y1, x2, y2) {
+  const bend = Math.min((y2 - y1) * 0.45, 38);
+  return `M${x1} ${y1} C${x1} ${y1 + bend},${x2} ${y2 - bend},${x2} ${y2}`;
+}
+
+function viewGraph(main) {
   main.innerHTML = `<div class="view view-wide">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <h1 class="view-title" style="margin:0">提交历史</h1>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span class="help">分支</span>
-        <select class="input" id="ht-branch" style="width:auto;min-width:150px">
-          <option value="">当前分支</option>
-        </select>
-      </div>
-    </div>
-    <div class="card" id="ht-body"></div></div>`;
-
-  // 分支下拉：列出本地所有分支，各分支历史独立查看
-  api(`/api/git/branches?path=${encodeURIComponent(repo())}`)
+    <h1 class="view-title">提交图</h1>
+    <div class="help" style="margin-bottom:10px">所有分支的提交与连线（最近 300 条，颜色区分分支线）。点击点/行查看提交详情。</div>
+    <div class="card gview" id="gview"><div class="empty">加载中…</div></div></div>`;
+  api(`/api/git/graph?path=${encodeURIComponent(repo())}&n=300`)
     .then((d) => {
-      const sel = $("#ht-branch");
-      if (!sel) return;
-      const cur = STATE.status?.branch || "";
-      sel.innerHTML = d.branches.map((b) =>
-        `<option value="${esc(b.name)}"${(STATE.histBranch || cur) === b.name ? " selected" : ""}>${esc(b.name)}${b.current ? "（当前）" : ""}</option>`
-      ).join("") || `<option value="">当前分支</option>`;
-      sel.onchange = () => {
-        STATE.histBranch = sel.value;
-        STATE.selCommit = null;
-        loadHtRows();
-      };
+      if (!d.ok) throw new Error(d.error || "加载失败");
+      renderGraph(d);
     })
-    .catch(() => {});
-
-  loadHtRows();
+    .catch((e) => {
+      const box = $("#gview");
+      if (box) box.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
+    });
 }
 
-async function loadHtRows() {
-  const body = $("#ht-body");
-  if (!body) return;
-  body.innerHTML = `<div class="empty">加载中…</div>`;
-  try {
-    const d = await api(`/api/git/log_table?path=${encodeURIComponent(repo())}&n=50&branch=${encodeURIComponent(STATE.histBranch)}`);
-    renderHtRows(d.commits || []);
-    renderSidebar();  // 侧栏最近提交列表跟随所选分支
-  } catch (e) {
-    body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
-  }
-}
-
-function renderHtRows(rows) {
-  const body = $("#ht-body");
-  if (!body) return;
-  STATE.commits = rows;
-  const other = STATE.histBranch && STATE.histBranch !== (STATE.status?.branch || "");
-  if (!rows.length) {
-    body.innerHTML = `<div class="empty"><h3>还没有提交</h3><p>${other ? `分支 ${esc(STATE.histBranch)} 上还没有提交` : "提交后会显示在这里"}</p></div>`;
+function renderGraph(d) {
+  const box = $("#gview");
+  if (!box) return;
+  const commits = d.commits || [];
+  if (!commits.length) {
+    box.innerHTML = `<div class="empty"><h3>还没有提交</h3><p>提交后会显示在这里</p></div>`;
     return;
   }
-  body.innerHTML = `
+  const width = d.width || 72;
+  const height = commits.length * GRAPH_ROW_H + 24;
+  const sel = STATE.selCommit;
+  const lanesSvg = (d.edges || []).map((e) =>
+    `<path d="${gCurve(e.x1, e.y1, e.x2, e.y2)}" stroke="var(--lane-${e.c})" stroke-width="1.6"
+      fill="none" opacity="0.8"${e.pending ? ` stroke-dasharray="4 4"` : ""}/>`).join("");
+  const nodesSvg = commits.map((c) => {
+    const col = `var(--lane-${c.lane % GRAPH_COLORS})`;
+    return `
+    <g class="gnode${c.hash === sel ? " sel" : ""}" data-hash="${esc(c.hash)}" transform="translate(${c.x} ${c.y})">
+      ${c.head ? `<circle r="9" fill="${col}" opacity="0.15"/>` : ""}
+      <circle r="${c.hash === sel ? 5.5 : 4}" fill="${c.hash === sel ? col : "var(--bg)"}" stroke="${col}" stroke-width="1.8"/>
+    </g>`;
+  }).join("");
+  const rows = commits.map((c, i) => {
+    const col = `var(--lane-${c.lane % GRAPH_COLORS})`;
+    const refs = (c.refs || []).map((r) =>
+      `<span class="gref ${r.kind}"${r.kind === "branch" ? ` style="color:${col};background:var(--lane-bg-${c.lane % GRAPH_COLORS})"` : ""}>${esc(r.name)}</span>`).join("");
+    return `
+    <div class="grow${c.hash === sel ? " selected" : ""}" data-hash="${esc(c.hash)}"
+      style="top:${i * GRAPH_ROW_H + 2}px;height:${GRAPH_ROW_H - 4}px;padding-left:${width + 8}px">
+      <span class="gmsg" title="${esc(c.msg)}">${esc(c.msg)}</span>
+      ${refs}
+      ${c.head ? `<span class="ghead">HEAD</span>` : ""}
+      <span class="gmeta">${esc(c.author)} · ${relTime(c.date)}</span>
+    </div>`;
+  }).join("");
+  box.innerHTML = `<div class="gscroll" style="max-height:calc(100vh - 230px)">
+    <div class="gcanvas" style="height:${height}px;min-width:${width + 330}px">
+      <svg class="glines" width="${width}" height="${height}" aria-hidden="true">${lanesSvg}${nodesSvg}</svg>
+      ${rows}
+    </div></div>`;
+  box.onclick = (e) => {
+    const hit = e.target.closest("[data-hash]");
+    if (!hit) return;
+    STATE.selCommit = hit.dataset.hash;
+    STATE.selFrom = "graph";
+    renderMain();
+  };
+}
+
+function viewHistoryTable(main) {
+  main.innerHTML = `<div class="view view-wide"><h1 class="view-title">提交历史</h1>
+    <div class="help" style="margin-bottom:10px">显示 [文件改动] 侧栏所选分支的历史；切分支请用文件改动页顶部的分支下拉</div>
+    <div class="card" id="ht-body"></div></div>`;
+  const rows = STATE.commits;
+  if (!rows.length) {
+    $("#ht-body").innerHTML = `<div class="empty"><h3>还没有提交</h3><p>提交后会显示在这里</p></div>`;
+    return;
+  }
+  $("#ht-body").innerHTML = `
     <table class="ht-table">
       <thead><tr><th>Hash</th><th>消息</th><th>作者</th><th>时间</th><th>改动</th></tr></thead>
       <tbody>
@@ -1505,10 +1553,11 @@ function renderHtRows(rows) {
           </tr>`).join("")}
       </tbody>
     </table>`;
-  body.onclick = (e) => {
+  $("#ht-body").onclick = (e) => {
     const tr = e.target.closest("tr[data-hash]");
     if (!tr) return;
     STATE.selCommit = tr.dataset.hash;
+    STATE.selFrom = "history";
     renderMain();
   };
 }
@@ -1761,7 +1810,7 @@ async function afterRepoReady(path) {
   api("/api/repo/activate", { method: "POST", body: { path } }).catch(() => {});  // 持久化：下次启动回到这个仓库
   STATE.status = null;
   STATE.commits = [];
-  STATE.histBranch = "";  // 历史分支选择不跨仓库记忆
+  STATE.tab = "graph";  // 打开仓库默认落在提交图
   STATE.selFile = null;
   STATE.selCommit = null;
   STATE.filter = "";
@@ -1967,7 +2016,7 @@ function viewSettings(main) {
 }
 
 function bindSettings() {
-  $("#btn-back").onclick = () => showView(repo() ? "#changes" : "#welcome");
+  $("#btn-back").onclick = () => showView(repo() ? { graph: "#graph", history: "#history" }[STATE.tab] || "#changes" : "#welcome");
   api("/api/config").then(({ config }) => {
     $("#proxy-url").value = config.proxy.url;
     $("#git-timeout").value = config.git.cmd_timeout;
@@ -2135,7 +2184,7 @@ async function refreshAll() {
       toast(e.message, "error");
       renderAll();
     });
-  const applyLog = api(`/api/git/log_table?path=${encodeURIComponent(repo())}&n=50&branch=${encodeURIComponent(STATE.histBranch)}`)
+  const applyLog = api(`/api/git/log_table?path=${encodeURIComponent(repo())}&n=50`)
     .then((lc) => {
       if (gen !== refreshGen) return;
       STATE.commits = lc.commits.map((c) => ({ ...c }));
@@ -2224,7 +2273,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const st = await api(`/api/repo/status_hardcore?path=${encodeURIComponent(STATE.active)}`);
         applyHardcore(st);
         syncRemoteFromStatus({ remote: st.remote || "" });
-        api(`/api/git/log_table?path=${encodeURIComponent(STATE.active)}&n=50&branch=${encodeURIComponent(STATE.histBranch)}`)
+        api(`/api/git/log_table?path=${encodeURIComponent(STATE.active)}&n=50`)
           .then((lc) => {
             STATE.commits = lc.commits.map((c) => ({ ...c }));
             renderAll();

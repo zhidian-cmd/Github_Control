@@ -1310,6 +1310,19 @@ async fn git_log_table(Query(q): Query<Q>) -> Response {
     ok(json!({"ok": true, "commits": cached_log_table(&repo, n, &branch).await}))
 }
 
+/// 全分支提交图（lane 布局在 Rust 侧完成，前端只画 SVG）
+async fn git_graph(Query(q): Query<Q>) -> Response {
+    let repo = q.path.unwrap_or_default();
+    let n = q.n.unwrap_or_else(|| "300".into()).parse::<i64>().unwrap_or(300).clamp(10, 1000);
+    match git_repo::get_graph(&repo, n).await {
+        Ok(mut v) => {
+            v["ok"] = json!(true);
+            ok(v)
+        }
+        Err(e) => ok(json!({"ok": false, "error": e})),
+    }
+}
+
 async fn git_branches(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
     ok(json!({"ok": true, "branches": git_repo::get_branches(&repo).await}))
@@ -2062,6 +2075,7 @@ pub fn build_router() -> Router {
         .route("/api/git/file_stats", get(git_file_stats))
         .route("/api/git/commit_stats", get(git_commit_stats))
         .route("/api/git/log_table", get(git_log_table))
+        .route("/api/git/graph", get(git_graph))
         .route("/api/git/branches", get(git_branches))
         .route("/api/git/in_progress", get(git_in_progress))
         .route("/api/git/in_progress_op", post(git_in_progress_op))
