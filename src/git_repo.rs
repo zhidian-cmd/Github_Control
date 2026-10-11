@@ -605,7 +605,7 @@ const GRAPH_ROW_H: f64 = 28.0;   // 每行高度（oil-git 56，这里紧凑一�
 const GRAPH_LANE_W: f64 = 20.0;  // 泳道宽度
 const GRAPH_COLORS: usize = 6;   // 颜色循环数（前端 --lane-0..5）
 
-/// 全分支提交图：branches+remotes+tags+HEAD 最近 n 条提交，
+/// 当前分支提交图：HEAD 最近 n 条提交（跟随 [文件改动] 侧栏的分支切换），
 /// Rust 侧完成泳道分配（oil-git layoutGraph 算法），前端只画 SVG。
 /// 返回 {head, width, commits:[{...refs,lane,x,y}], edges:[{x1,y1,x2,y2,c,pending}]}。
 pub async fn get_graph(repo: &str, n: i64) -> Result<Value, String> {
@@ -650,13 +650,14 @@ pub async fn get_graph(repo: &str, n: i64) -> Result<Value, String> {
         }
     }
 
-    // 提交：topo+date 序，全分支（oil-git history 的 reference="all" 取法）
+    // 提交：topo+date 序，当前分支（HEAD）。切换分支（checkout）后 HEAD 变，
+    // 图自然只显示对应分支的提交；分叉/合并线由 merge 提交的父指针呈现
     let (lrc, lout) = runner::run_git(
         &[
             "log".into(), "--topo-order".into(), "--date-order".into(),
-            "--branches".into(), "--remotes".into(), "--tags".into(),
             "-n".into(), n.to_string(),
             "--format=%H%x00%P%x00%an%x00%cI%x00%s".into(),
+            "HEAD".into(),
             "--".into(),
         ],
         Some(repo),

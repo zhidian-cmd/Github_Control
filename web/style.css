@@ -858,6 +858,7 @@ textarea.input { resize: vertical; min-height: 70px; }
 
 .gview { padding: 0; overflow: hidden; }
 .gscroll { overflow: auto; }
+#ov-graph .gscroll { max-height: 420px; }  /* 概览内嵌：限高滚动，不撑爆页面 */
 .gcanvas { position: relative; font-size: 12px; }
 .glines { position: absolute; top: 0; left: 0; }
 .glines .gnode { cursor: pointer; }
