@@ -128,7 +128,10 @@ pub fn run_git_sync(args: &[String], repo: Option<&str>, cwd: Option<&str>) -> (
     match cmd.output() {
         Ok(o) => {
             let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-            (o.status.code().unwrap_or(-1), format!("{}{}", text(&o.stdout), text(&o.stderr)))
+            (
+                o.status.code().unwrap_or(-1),
+                format!("{}{}", text(&o.stdout), text(&o.stderr)),
+            )
         }
         Err(e) => (-1, e.to_string()),
     }
@@ -152,6 +155,7 @@ pub async fn run_gh(args: &[String], timeout: Option<f64>) -> (i32, String) {
 
 /// 不带兜底的 gh 执行：给"专门测某一条链路"的场景用（代理测试/直连测试），
 /// 否则测试会把兜底重试的结果混进去，失去检测意义。
+#[allow(dead_code)]
 pub async fn run_gh_nb(args: &[String], timeout: Option<f64>) -> (i32, String) {
     let mut cmd = vec![paths::gh_exe().to_string_lossy().into_owned()];
     cmd.extend(args.iter().cloned());
@@ -161,11 +165,7 @@ pub async fn run_gh_nb(args: &[String], timeout: Option<f64>) -> (i32, String) {
 /// 自动兜底执行：填了代理地址 → 主路径为代理，网络类失败自动改走直连重试一次；
 /// 没填代理 → 纯直连，无从兜底。成功时输出头部注明实际走的链路。
 /// 兜底恒开：链路诊断交给「测试代理」「测试直连」按钮（它们不兜底）。
-pub async fn run_fb(
-    cmd: &[String],
-    timeout: Option<f64>,
-    input: Option<String>,
-) -> (i32, String) {
+pub async fn run_fb(cmd: &[String], timeout: Option<f64>, input: Option<String>) -> (i32, String) {
     let (rc, out) = run(cmd, timeout, input.clone(), None).await;
     if rc == 0 {
         return (rc, out);
@@ -186,14 +186,22 @@ pub async fn run_fb(
     let env_map = env::build_env_direct();
     let (rc2, out2) = run(cmd, timeout, input, Some(&env_map)).await;
     if rc2 == 0 {
-        (rc2, format!("[自动兜底] 代理网络失败，已自动改走直连重试成功。\n\n{out2}"))
+        (
+            rc2,
+            format!("[自动兜底] 代理网络失败，已自动改走直连重试成功。\n\n{out2}"),
+        )
     } else {
         (rc, format!("{out}\n\n（已自动尝试直连，同样失败）"))
     }
 }
 
 /// 兜底版 git：本地命令不含网络关键词时行为与 run_git 完全一致
-pub async fn run_git_fb(args: &[String], repo: Option<&str>, timeout: Option<f64>) -> (i32, String) {
+#[allow(dead_code)]
+pub async fn run_git_fb(
+    args: &[String],
+    repo: Option<&str>,
+    timeout: Option<f64>,
+) -> (i32, String) {
     let mut cmd = vec![paths::git_exe().to_string_lossy().into_owned()];
     if let Some(r) = repo {
         cmd.push("-C".into());
@@ -201,6 +209,20 @@ pub async fn run_git_fb(args: &[String], repo: Option<&str>, timeout: Option<f64
     }
     cmd.extend(args.iter().cloned());
     run_fb(&cmd, timeout, None).await
+}
+
+/// 日志脱敏：屏蔽可能经由命令输出/参数写入 run.log 的明文凭据。
+/// 覆盖 GitHub 令牌（ghp_/gho_/ghu_/ghs_/ghr_/github_pat_）与 URL 内 Basic Auth。
+fn redact(s: &str) -> String {
+    let mut out = s.to_string();
+    if let Ok(re) = regex::Regex::new(r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})")
+    {
+        out = re.replace_all(&out, "***REDACTED***").into_owned();
+    }
+    if let Ok(re) = regex::Regex::new(r"(?i)(https?://)[^/\s:@]+:[^/\s:@]+@") {
+        out = re.replace_all(&out, "$1***:***@").into_owned();
+    }
+    out
 }
 
 /// 写操作日志 run.log，超过 1MB 轮转为 run.old.log
@@ -213,16 +235,20 @@ fn log_command(cmd: &[String], returncode: i32, output: &str) {
             let _ = std::fs::rename(&log_file, log_dir.join("run.old.log"));
         }
     }
-    let head: String = output.chars().take(2000).collect();
+    let head: String = redact(&output.chars().take(2000).collect::<String>());
     let line = format!(
         "[{}]\nCMD: {}\nRC:  {}\nOUT: {}\n{}\n",
         paths::now_iso(),
-        cmd.join(" "),
+        redact(&cmd.join(" ")),
         returncode,
         head,
         "-".repeat(60)
     );
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+    {
         use std::io::Write;
         let _ = f.write_all(line.as_bytes());
     }
@@ -237,7 +263,11 @@ pub fn log_error(prefix: &str, body: &str) {
         paths::now_iso(),
         "-".repeat(60)
     );
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+    {
         use std::io::Write;
         let _ = f.write_all(line.as_bytes());
     }

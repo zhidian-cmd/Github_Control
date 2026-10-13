@@ -3,7 +3,15 @@
 
 use serde_json::{json, Value};
 
-const SECRET_PATTERNS: [&str; 7] = [".env", ".key", ".pem", ".p12", ".pfx", "id_rsa", "id_ed25519"];
+const SECRET_PATTERNS: [&str; 7] = [
+    ".env",
+    ".key",
+    ".pem",
+    ".p12",
+    ".pfx",
+    "id_rsa",
+    "id_ed25519",
+];
 
 #[cfg(unix)]
 fn mode_oct(mode: u32) -> String {

@@ -135,9 +135,18 @@ async fn ensure_git_identity(repo: &str) {
         .unwrap_or("")
         .trim()
         .to_string();
-    let name = if name.is_empty() { "GithubControl".to_string() } else { name };
+    let name = if name.is_empty() {
+        "GithubControl".to_string()
+    } else {
+        name
+    };
     let _ = runner::run_git(
-        &["config".into(), "--global".into(), "user.name".into(), name.clone()],
+        &[
+            "config".into(),
+            "--global".into(),
+            "user.name".into(),
+            name.clone(),
+        ],
         Some(repo),
         None,
     )
@@ -203,7 +212,10 @@ async fn index() -> Response {
             };
             no_store_response(out, "text/html; charset=utf-8")
         }
-        Err(_) => json_response(StatusCode::NOT_FOUND, json!({"ok": false, "error": "index.html 不存在"})),
+        Err(_) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({"ok": false, "error": "index.html 不存在"}),
+        ),
     }
 }
 
@@ -211,7 +223,10 @@ async fn favicon() -> Response {
     let ico = paths::assets_dir().join("favicon.ico");
     match std::fs::read(&ico) {
         Ok(b) => no_store_response_bytes(b, "image/x-icon"),
-        Err(_) => json_response(StatusCode::NOT_FOUND, json!({"ok": false, "error": "favicon 不存在"})),
+        Err(_) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({"ok": false, "error": "favicon 不存在"}),
+        ),
     }
 }
 
@@ -242,11 +257,7 @@ fn content_type(path: &str) -> &'static str {
 /// 作为 fallback 处理所有未匹配路径，路径直接取自 Request URI，
 /// 不依赖 axum wildcard 的捕获语义。
 async fn static_files(req: axum::extract::Request) -> Response {
-    let path = req
-        .uri()
-        .path()
-        .trim_start_matches('/')
-        .to_string();
+    let path = req.uri().path().trim_start_matches('/').to_string();
     let web = paths::web_dir();
     let candidate = web.join(&path);
     let canon_c = std::fs::canonicalize(&candidate);
@@ -256,7 +267,10 @@ async fn static_files(req: axum::extract::Request) -> Response {
         _ => false,
     };
     if !ok {
-        return json_response(StatusCode::NOT_FOUND, json!({"ok": false, "error": "文件不存在"}));
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({"ok": false, "error": "文件不存在"}),
+        );
     }
     match std::fs::read(&candidate) {
         Ok(b) => {
@@ -300,7 +314,10 @@ async fn static_files(req: axum::extract::Request) -> Response {
             }
             resp
         }
-        Err(_) => json_response(StatusCode::NOT_FOUND, json!({"ok": false, "error": "文件不存在"})),
+        Err(_) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({"ok": false, "error": "文件不存在"}),
+        ),
     }
 }
 
@@ -395,7 +412,11 @@ async fn auth_status() -> Response {
 /// 没有保存过 token 时返回空串，前端据此展示"尚未保存"提示。
 async fn auth_token_masked() -> Response {
     let (rc, out) = runner::run_gh(&["auth".into(), "token".into()], Some(10.0)).await;
-    let t = if rc == 0 { out.trim().to_string() } else { String::new() };
+    let t = if rc == 0 {
+        out.trim().to_string()
+    } else {
+        String::new()
+    };
     let masked = if t.len() >= 12 && t.is_ascii() {
         format!("{}****{}", &t[..4], &t[t.len() - 4..])
     } else if !t.is_empty() {
@@ -466,9 +487,7 @@ async fn config_versions() -> Response {
 
 async fn config_proxy_test() -> Response {
     let cfg = config::load_config(false);
-    let url = net::normalize_proxy_url(
-        cfg["proxy"]["url"].as_str().unwrap_or(""),
-    );
+    let url = net::normalize_proxy_url(cfg["proxy"]["url"].as_str().unwrap_or(""));
     if url.is_empty() {
         return ok(json!({"ok": false, "error": "请先填写代理地址"}));
     }
@@ -497,7 +516,13 @@ async fn config_proxy_test() -> Response {
     let gh = paths::gh_exe().to_string_lossy().into_owned();
     let env_map = env::build_env_forced_proxy(&url);
     let (rc, out) = runner::run(
-        &[gh, "api".into(), "user".into(), "--jq".into(), ".login".into()],
+        &[
+            gh,
+            "api".into(),
+            "user".into(),
+            "--jq".into(),
+            ".login".into(),
+        ],
         Some(20.0),
         None,
         Some(&env_map),
@@ -644,7 +669,7 @@ fn shell_open_url(url: &str) -> Result<(), String> {
             u.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            SW_SHOWNORMAL as i32,
+            SW_SHOWNORMAL,
         )
     };
     if r as isize <= 32 {
@@ -655,7 +680,11 @@ fn shell_open_url(url: &str) -> Result<(), String> {
 }
 
 async fn gh_open_web(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if !std::path::Path::new(&path).is_dir() {
         return ok(json!({"ok": false, "error": "仓库目录不存在"}));
     }
@@ -684,7 +713,12 @@ async fn gh_open_web(Json(d): Json<Value>) -> Response {
 /// 在系统默认浏览器中打开外部 URL。
 /// Tauri WebView 默认不弹新窗口，前端 target=_blank 链接由 SHIM 拦截后走这里。
 async fn gh_open_url(Json(d): Json<Value>) -> Response {
-    let url = d.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let url = d
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) || url.len() > 2048 {
         return ok(json!({"ok": false, "error": "仅支持 http/https 链接"}));
     }
@@ -703,8 +737,17 @@ async fn gh_open_url(Json(d): Json<Value>) -> Response {
 // ---------------- /api/rollback/* ----------------
 
 async fn rollback_execute(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let commit = d.get("commit").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let commit = d
+        .get("commit")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let mode = d.get("mode").and_then(|v| v.as_str()).unwrap_or("");
     if commit.is_empty() || mode.is_empty() {
         return ok(json!({"ok": false, "error": "缺少参数"}));
@@ -731,8 +774,16 @@ async fn rollback_recovery(Query(q): Query<Q>) -> Response {
 }
 
 async fn rollback_recover(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let commit = d.get("commit").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let commit = d
+        .get("commit")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     match git_rollback::recover_to(&repo, &commit, true).await {
         Ok(v) => ok(v),
         Err(e) => ok(json!({"ok": false, "error": e})),
@@ -742,7 +793,12 @@ async fn rollback_recover(Json(d): Json<Value>) -> Response {
 // ---------------- /api/git/* ----------------
 
 async fn git_commit(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let msg = d
         .get("summary")
         .or_else(|| d.get("message"))
@@ -757,10 +813,17 @@ async fn git_commit(Json(d): Json<Value>) -> Response {
     let (arc, aout) = runner::run_git(&["add".into(), "-A".into()], Some(&repo), None).await;
     if arc != 0 {
         let err = aout.trim();
-        return ok(json!({"ok": false, "error": if err.is_empty() { "暂存改动失败，请重试".to_string() } else { err.to_string() }}));
+        return ok(
+            json!({"ok": false, "error": if err.is_empty() { "暂存改动失败，请重试".to_string() } else { err.to_string() }}),
+        );
     }
     ensure_git_identity(&repo).await;
-    let desc = d.get("description").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let desc = d
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let mut args = vec!["commit".into(), "-m".into(), msg];
     if !desc.is_empty() {
         args.push("-m".into());
@@ -771,9 +834,18 @@ async fn git_commit(Json(d): Json<Value>) -> Response {
 }
 
 async fn git_restore(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let file = d.get("file").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let (rc, out) = runner::run_git(&["restore".into(), "--".into(), file], Some(&repo), None).await;
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let file = d
+        .get("file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let (rc, out) =
+        runner::run_git(&["restore".into(), "--".into(), file], Some(&repo), None).await;
     ok(json!({"ok": rc == 0, "error": if rc == 0 { Value::Null } else { json!(out.trim()) }}))
 }
 
@@ -781,8 +853,13 @@ async fn git_diff(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
     let file = q.file.unwrap_or_default();
     let wd = q.word_diff.as_deref() == Some("1");
-    let text = git_repo::get_diff(&repo, if file.is_empty() { None } else { Some(&file) }, wd).await;
-    let lines = if text.is_empty() { 0 } else { text.matches('\n').count() + 1 };
+    let text =
+        git_repo::get_diff(&repo, if file.is_empty() { None } else { Some(&file) }, wd).await;
+    let lines = if text.is_empty() {
+        0
+    } else {
+        text.matches('\n').count() + 1
+    };
     ok(json!({"ok": true, "diff": text, "lines": lines}))
 }
 
@@ -800,12 +877,22 @@ async fn git_commit_detail(Query(q): Query<Q>) -> Response {
 
 async fn git_has_origin(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
-    let (rc, _) = runner::run_git(&["remote".into(), "get-url".into(), "origin".into()], Some(&repo), None).await;
+    let (rc, _) = runner::run_git(
+        &["remote".into(), "get-url".into(), "origin".into()],
+        Some(&repo),
+        None,
+    )
+    .await;
     ok(json!({"ok": true, "has_origin": rc == 0}))
 }
 
 async fn git_pull(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if let Some(err) = net::proxy_preflight() {
         return ok(json!({"ok": false, "error": err}));
     }
@@ -842,7 +929,9 @@ async fn git_pull(Json(d): Json<Value>) -> Response {
     let low = out.to_lowercase();
     // 远端还没有这个分支（空仓库或未推送过）：无需更新，直接推送即可
     if low.contains("couldn't find remote ref") {
-        return ok(json!({"ok": false, "error": format!("远程还没有 {branch} 分支，无需更新，直接推送即可")}));
+        return ok(
+            json!({"ok": false, "error": format!("远程还没有 {branch} 分支，无需更新，直接推送即可")}),
+        );
     }
     // 远端是网页端独立创建的（如自带 README 的首次提交）：与本地无共同祖先
     if low.contains("refusing to merge unrelated histories") {
@@ -871,7 +960,9 @@ async fn git_pull(Json(d): Json<Value>) -> Response {
             }
         })
         .await;
-        return ok(json!({"ok": rc2 == 0, "error": if rc2 == 0 { Value::Null } else { json!(auth_hint(&out2)) }}));
+        return ok(
+            json!({"ok": rc2 == 0, "error": if rc2 == 0 { Value::Null } else { json!(auth_hint(&out2)) }}),
+        );
     }
     ok(json!({"ok": false, "error": auth_hint(&out)}))
 }
@@ -883,7 +974,11 @@ async fn gh_login() -> String {
         Some(60.0),
     )
     .await;
-    if rc == 0 { out.trim().to_string() } else { String::new() }
+    if rc == 0 {
+        out.trim().to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// 把 <login>/<name> 设为 origin 并推送（以本地为准）。
@@ -898,7 +993,12 @@ async fn attach_origin_and_push(repo: &str, branch: &str, login: &str, name: &st
     )
     .await;
     if rca != 0 {
-        runner::run_git(&["remote".into(), "set-url".into(), "origin".into(), url], Some(repo), None).await;
+        runner::run_git(
+            &["remote".into(), "set-url".into(), "origin".into(), url],
+            Some(repo),
+            None,
+        )
+        .await;
     }
     runner::run_git(&["fetch".into(), "origin".into()], Some(repo), Some(300.0)).await;
     let (rc, out) = push_with_lease(repo, branch, true).await;
@@ -909,7 +1009,12 @@ async fn attach_origin_and_push(repo: &str, branch: &str, login: &str, name: &st
 }
 
 async fn git_push(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     // 注意 serde_json 的坑：前端传 "create": null 时 get 返回 Some(Value::Null)
     // （键存在！），直接 cloned 会让 is_some() 误判为"创建模式"，随后从
     // Null 里取 name 得空串 → 弹"仓库名只能用英文"这种风马牛不相及的错误。
@@ -931,7 +1036,12 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         return ok(json!({"ok": false, "error": "无法确定当前分支"}));
     }
 
-    let (rc, _) = runner::run_git(&["remote".into(), "get-url".into(), "origin".into()], Some(&repo), None).await;
+    let (rc, _) = runner::run_git(
+        &["remote".into(), "get-url".into(), "origin".into()],
+        Some(&repo),
+        None,
+    )
+    .await;
     let mut has_origin = rc == 0;
     if create.is_some() && has_origin {
         // 弹窗打开期间 origin 可能已被上一次尝试重新关联好。先 ls-remote 验证：
@@ -949,7 +1059,12 @@ async fn git_push(Json(d): Json<Value>) -> Response {
                 || low.contains("not found")
                 || low.contains("404"));
         if dead {
-            runner::run_git(&["remote".into(), "remove".into(), "origin".into()], Some(&repo), None).await;
+            runner::run_git(
+                &["remote".into(), "remove".into(), "origin".into()],
+                Some(&repo),
+                None,
+            )
+            .await;
             has_origin = false;
         }
     }
@@ -968,7 +1083,9 @@ async fn git_push(Json(d): Json<Value>) -> Response {
             .to_string();
         let re = regex::Regex::new(r"^[A-Za-z0-9._-]+$").unwrap();
         if !re.is_match(&name) {
-            return ok(json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}));
+            return ok(
+                json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}),
+            );
         }
         if let Some(err) = net::proxy_preflight() {
             return ok(json!({"ok": false, "error": err}));
@@ -996,15 +1113,26 @@ async fn git_push(Json(d): Json<Value>) -> Response {
                 return ok(attach_origin_and_push(&repo, &branch, &login, &name).await);
             }
         }
-        let vis = if create.get("private").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let vis = if create
+            .get("private")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             "--private"
         } else {
             "--public"
         };
         let (rc, out) = runner::run_gh(
             &[
-                "repo".into(), "create".into(), name.clone(), "--source".into(), repo.clone(),
-                "--remote".into(), "origin".into(), vis.into(), "--push".into(),
+                "repo".into(),
+                "create".into(),
+                name.clone(),
+                "--source".into(),
+                repo.clone(),
+                "--remote".into(),
+                "origin".into(),
+                vis.into(),
+                "--push".into(),
             ],
             Some(600.0),
         )
@@ -1012,15 +1140,25 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         if rc != 0 {
             if out.to_lowercase().contains("already exists") {
                 // 竞态兜底：探测时不存在、创建时又被占住（或探测请求本身网络失败）
-                let login = if login.is_empty() { gh_login().await } else { login };
+                let login = if login.is_empty() {
+                    gh_login().await
+                } else {
+                    login
+                };
                 if login.is_empty() {
-                    return ok(json!({"ok": false, "error": "远程已有同名仓库，但获取账号名失败，请到设置里手动填写远程地址"}));
+                    return ok(
+                        json!({"ok": false, "error": "远程已有同名仓库，但获取账号名失败，请到设置里手动填写远程地址"}),
+                    );
                 }
                 return ok(attach_origin_and_push(&repo, &branch, &login, &name).await);
             }
             return ok(json!({"ok": false, "error": out.trim()}));
         }
-        let vis_cn = if create.get("private").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let vis_cn = if create
+            .get("private")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             "私有"
         } else {
             "公开"
@@ -1046,7 +1184,13 @@ async fn stash_if_dirty(repo: &str) -> bool {
         return false;
     }
     let (rc, _) = runner::run_git(
-        &["stash".into(), "push".into(), "-u".into(), "-m".into(), "auto before history rewrite".into()],
+        &[
+            "stash".into(),
+            "push".into(),
+            "-u".into(),
+            "-m".into(),
+            "auto before history rewrite".into(),
+        ],
         Some(repo),
         None,
     )
@@ -1075,68 +1219,153 @@ async fn finish_delete(repo: &str, stashed: bool, base_hint: String) -> Response
 }
 
 /// 历史提交右键操作：检出（游离查看）/ 清空当前历史（保留文件）
+/// 校验用户提供的 git 引用（commit / 分支 / tag）能否安全作为命令行参数使用。
+/// 拒绝：空串、以 '-' 开头（选项注入）、含空白或控制字符、超长（>255）。
+fn is_safe_ref(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && s.len() <= 255
+        && s.chars().all(|c| !c.is_whitespace() && !c.is_control())
+}
+
 async fn git_commit_ops(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let op = d.get("op").and_then(|v| v.as_str()).unwrap_or("");
-    let commit = d.get("commit").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let commit = d
+        .get("commit")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     if op == "checkout" {
         if commit.is_empty() {
             return ok(json!({"ok": false, "error": "缺少 commit"}));
         }
-        let status = git_repo::get_status(&repo).await.unwrap_or_else(|_| json!({"files": []}));
+        if !is_safe_ref(&commit) {
+            return ok(json!({"ok": false, "error": "非法的 commit 引用"}));
+        }
+        let status = match git_repo::get_status(&repo).await {
+            Ok(s) => s,
+            Err(e) => return ok(json!({"ok": false, "error": format!("无法读取工作区状态：{e}")})),
+        };
         let mut stashed = false;
-        if !status["files"].as_array().map(|a| a.is_empty()).unwrap_or(true) {
-            runner::run_git(&["stash".into(), "push".into(), "-m".into(), "auto before checkout".into()], Some(&repo), None).await;
+        if !status["files"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true)
+        {
+            runner::run_git(
+                &[
+                    "stash".into(),
+                    "push".into(),
+                    "-m".into(),
+                    "auto before checkout".into(),
+                ],
+                Some(&repo),
+                None,
+            )
+            .await;
             stashed = true;
         }
         let (rc, out) = runner::run_git(&["checkout".into(), commit], Some(&repo), None).await;
         if rc != 0 {
             return ok(json!({"ok": false, "error": out.trim()}));
         }
-        let hint = if stashed { "已自动储藏改动，切回分支后可恢复".to_string() } else { String::new() };
+        let hint = if stashed {
+            "已自动储藏改动，切回分支后可恢复".to_string()
+        } else {
+            String::new()
+        };
         return ok(json!({"ok": true, "hint": hint}));
     }
 
     if op == "delete_one" {
         // 只删除选中的这一个提交，其余重放（rebase --onto）；硬删除前打保险 tag
-        let (rc, _) = runner::run_git(&["rev-parse".into(), "--verify".into(), "HEAD".into()], Some(&repo), None).await;
+        if !is_safe_ref(&commit) {
+            return ok(json!({"ok": false, "error": "非法的 commit 引用"}));
+        }
+        let (rc, _) = runner::run_git(
+            &["rev-parse".into(), "--verify".into(), "HEAD".into()],
+            Some(&repo),
+            None,
+        )
+        .await;
         if rc != 0 {
             return ok(json!({"ok": false, "error": "仓库还没有提交"}));
         }
-        let (rc, _) = runner::run_git(&["merge-base".into(), "--is-ancestor".into(), commit.clone(), "HEAD".into()], Some(&repo), None).await;
+        let (rc, _) = runner::run_git(
+            &[
+                "merge-base".into(),
+                "--is-ancestor".into(),
+                commit.clone(),
+                "HEAD".into(),
+            ],
+            Some(&repo),
+            None,
+        )
+        .await;
         if rc != 0 {
             return ok(json!({"ok": false, "error": "只能删除当前分支历史中的提交"}));
         }
-        let (_, head) = runner::run_git(&["rev-parse".into(), "HEAD".into()], Some(&repo), None).await;
+        let (_, head) =
+            runner::run_git(&["rev-parse".into(), "HEAD".into()], Some(&repo), None).await;
         let is_head = commit == head.trim();
-        let (rc, parent) = runner::run_git(&["rev-parse".into(), format!("{commit}~1")], Some(&repo), None).await;
+        let (rc, parent) = runner::run_git(
+            &["rev-parse".into(), format!("{commit}~1")],
+            Some(&repo),
+            None,
+        )
+        .await;
         let is_root = rc != 0;
         let parent = parent.trim().to_string();
         let cur = git_repo::get_current_branch(&repo).await;
-        let branch = if cur.is_empty() { "main".to_string() } else { cur };
+        let branch = if cur.is_empty() {
+            "main".to_string()
+        } else {
+            cur
+        };
 
         if is_head && is_root {
             // 不打任何 tag：仓库原封不动，只拒绝
-            return ok(json!({"ok": false, "error": "这是仓库唯一的提交，删除它等于清空全部历史；请改用硬回退或在确认后手动处理"}));
+            return ok(
+                json!({"ok": false, "error": "这是仓库唯一的提交，删除它等于清空全部历史；请改用硬回退或在确认后手动处理"}),
+            );
         }
 
         if is_head {
             // 删最新一条：退到上一位。保险 tag 由 hard_reset 内部统一打，避免同秒撞名
             return match git_rollback::hard_reset(&repo, &parent, true).await {
-                Ok(r) => ok(json!({"ok": true, "hint": format!("已删除该提交，保险 tag {} 可在紧急恢复中找回", r["backup_tag"].as_str().unwrap_or(""))})),
+                Ok(r) => ok(
+                    json!({"ok": true, "hint": format!("已删除该提交，保险 tag {} 可在紧急恢复中找回", r["backup_tag"].as_str().unwrap_or(""))}),
+                ),
                 Err(e) => ok(json!({"ok": false, "error": e})),
             };
         }
 
         // rebase 类路径：这里才打本路径自己的保险 tag
         let tag = format!("_backup_{}", paths::now_compact());
-        runner::run_git(&["tag".into(), tag.clone(), "HEAD".into()], Some(&repo), None).await;
+        runner::run_git(
+            &["tag".into(), tag.clone(), "HEAD".into()],
+            Some(&repo),
+            None,
+        )
+        .await;
 
         if is_root {
             // 删根提交：把第二条提交重铸为无父新根，其余提交重放到它上面
             let (rc, child) = runner::run_git(
-                &["rev-list".into(), "--ancestry-path".into(), "--reverse".into(), format!("{commit}..HEAD")],
+                &[
+                    "rev-list".into(),
+                    "--ancestry-path".into(),
+                    "--reverse".into(),
+                    format!("{commit}..HEAD"),
+                ],
                 Some(&repo),
                 None,
             )
@@ -1145,23 +1374,56 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
                 return ok(json!({"ok": false, "error": "无法定位根提交的下一条"}));
             }
             let child = child.lines().next().unwrap_or("").trim().to_string();
-            let (rc, tree) = runner::run_git(&["log".into(), "--format=%T".into(), "-1".into(), child.clone()], Some(&repo), None).await;
-            let (rc2, msg) = runner::run_git(&["log".into(), "--format=%s".into(), "-1".into(), child.clone()], Some(&repo), None).await;
+            let (rc, tree) = runner::run_git(
+                &[
+                    "log".into(),
+                    "--format=%T".into(),
+                    "-1".into(),
+                    child.clone(),
+                ],
+                Some(&repo),
+                None,
+            )
+            .await;
+            let (rc2, msg) = runner::run_git(
+                &[
+                    "log".into(),
+                    "--format=%s".into(),
+                    "-1".into(),
+                    child.clone(),
+                ],
+                Some(&repo),
+                None,
+            )
+            .await;
             if rc != 0 || rc2 != 0 {
                 return ok(json!({"ok": false, "error": "读取下一条提交信息失败"}));
             }
             let (rc, new_root) = runner::run_git(
-                &["commit-tree".into(), tree.trim().to_string(), "-m".into(), msg.trim().to_string()],
+                &[
+                    "commit-tree".into(),
+                    tree.trim().to_string(),
+                    "-m".into(),
+                    msg.trim().to_string(),
+                ],
                 Some(&repo),
                 None,
             )
             .await;
             if rc != 0 {
-                return ok(json!({"ok": false, "error": if new_root.trim().is_empty() { "重铸新根失败" } else { new_root.trim() }}));
+                return ok(
+                    json!({"ok": false, "error": if new_root.trim().is_empty() { "重铸新根失败" } else { new_root.trim() }}),
+                );
             }
             let stashed = stash_if_dirty(&repo).await;
             let (rc, _out) = runner::run_git(
-                &["rebase".into(), "--onto".into(), new_root.trim().to_string(), child, branch],
+                &[
+                    "rebase".into(),
+                    "--onto".into(),
+                    new_root.trim().to_string(),
+                    child,
+                    branch,
+                ],
                 Some(&repo),
                 Some(300.0),
             )
@@ -1169,9 +1431,16 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
             if rc != 0 {
                 runner::run_git(&["rebase".into(), "--abort".into()], Some(&repo), None).await;
                 pop_stash(&repo, stashed).await;
-                return ok(json!({"ok": false, "error": "删除该提交会引发内容冲突，已自动恢复原状，什么都没有改"}));
+                return ok(
+                    json!({"ok": false, "error": "删除该提交会引发内容冲突，已自动恢复原状，什么都没有改"}),
+                );
             }
-            return finish_delete(&repo, stashed, format!("已删除根提交，下一条提交成为新根；保险 tag {tag} 可找回")).await;
+            return finish_delete(
+                &repo,
+                stashed,
+                format!("已删除根提交，下一条提交成为新根；保险 tag {tag} 可找回"),
+            )
+            .await;
         }
 
         // 中间的提交：rebase --onto 重放后续提交
@@ -1185,24 +1454,62 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
         if rc != 0 {
             runner::run_git(&["rebase".into(), "--abort".into()], Some(&repo), None).await;
             pop_stash(&repo, stashed).await;
-            return ok(json!({"ok": false, "error": "删除该提交会引发内容冲突，已自动恢复原状，什么都没有改"}));
+            return ok(
+                json!({"ok": false, "error": "删除该提交会引发内容冲突，已自动恢复原状，什么都没有改"}),
+            );
         }
-        return finish_delete(&repo, stashed, format!("已删除该提交，其余提交已重放；保险 tag {tag} 可找回")).await;
+        return finish_delete(
+            &repo,
+            stashed,
+            format!("已删除该提交，其余提交已重放；保险 tag {tag} 可找回"),
+        )
+        .await;
     }
     ok(json!({"ok": false, "error": format!("未知操作 {op}")}))
 }
 
 async fn git_branch(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let action = d.get("action").and_then(|v| v.as_str()).unwrap_or("");
-    let name = d.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let name = d
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() || !is_safe_ref(&name) {
+        return ok(json!({"ok": false, "error": "非法的分支名"}));
+    }
     let (rc, out) = match action {
         "switch" => {
             // 未提交改动时先 stash
-            let status = git_repo::get_status(&repo).await.unwrap_or_else(|_| json!({"files": []}));
-            let stashed = !status["files"].as_array().map(|a| a.is_empty()).unwrap_or(true);
+            let status = match git_repo::get_status(&repo).await {
+                Ok(s) => s,
+                Err(e) => {
+                    return ok(json!({"ok": false, "error": format!("无法读取工作区状态：{e}")}))
+                }
+            };
+            let stashed = !status["files"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(true);
             if stashed {
-                runner::run_git(&["stash".into(), "push".into(), "-m".into(), "auto before switch".into()], Some(&repo), None).await;
+                runner::run_git(
+                    &[
+                        "stash".into(),
+                        "push".into(),
+                        "-m".into(),
+                        "auto before switch".into(),
+                    ],
+                    Some(&repo),
+                    None,
+                )
+                .await;
             }
             let (rc, out) = runner::run_git(&["switch".into(), name], Some(&repo), None).await;
             if rc == 0 && stashed {
@@ -1216,7 +1523,15 @@ async fn git_branch(Json(d): Json<Value>) -> Response {
             runner::run_git(&["branch".into(), flag.into(), name], Some(&repo), None).await
         }
         "create" => {
-            let start = d.get("start").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let start = d
+                .get("start")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !start.is_empty() && !is_safe_ref(&start) {
+                return ok(json!({"ok": false, "error": "非法的起始引用"}));
+            }
             if start.is_empty() {
                 runner::run_git(&["branch".into(), name], Some(&repo), None).await
             } else {
@@ -1224,8 +1539,17 @@ async fn git_branch(Json(d): Json<Value>) -> Response {
             }
         }
         "stash" => {
-            let msg = d.get("message").and_then(|v| v.as_str()).unwrap_or("stash").to_string();
-            runner::run_git(&["stash".into(), "push".into(), "-m".into(), msg], Some(&repo), None).await
+            let msg = d
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stash")
+                .to_string();
+            runner::run_git(
+                &["stash".into(), "push".into(), "-m".into(), msg],
+                Some(&repo),
+                None,
+            )
+            .await
         }
         "stash_pop" => runner::run_git(&["stash".into(), "pop".into()], Some(&repo), None).await,
         "tag" => runner::run_git(&["tag".into(), name], Some(&repo), None).await,
@@ -1238,6 +1562,9 @@ async fn git_commit_file_diff(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
     let commit = q.commit.unwrap_or_default();
     let file = q.file.unwrap_or_default();
+    if !is_safe_ref(&commit) || file.chars().any(|c| c.is_control()) {
+        return ok(json!({"ok": false, "error": "非法的 commit 或文件路径"}));
+    }
     let (rc, out) = runner::run_git(
         &["show".into(), commit, "--format=".into(), "--".into(), file],
         Some(&repo),
@@ -1261,6 +1588,9 @@ async fn git_file_stats(Query(q): Query<Q>) -> Response {
 async fn git_commit_stats(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
     let commit = q.commit.unwrap_or_default();
+    if !is_safe_ref(&commit) {
+        return ok(json!({"ok": false, "error": "非法的 commit 引用"}));
+    }
     match git_repo::get_commit_stats(&repo, &commit).await {
         Ok(mut v) => {
             v["ok"] = json!(true);
@@ -1274,8 +1604,8 @@ async fn git_commit_stats(Query(q): Query<Q>) -> Response {
 /// 指定分支时校验该分支 tip（rev-parse 分支名），tip 未变则历史必然不变
 /// （工作区改动不影响已提交的 numstat），直接返回缓存；变了才重跑 git log。
 /// branch 为空 = 当前 HEAD。返回 (commits, base)，base = 支线独有过滤所用的基准。
-static LOG_TABLE_CACHE: OnceLock<Mutex<HashMap<(String, String, i64), (String, (Vec<Value>, Option<String>))>>> =
-    OnceLock::new();
+type LogTableCache = Mutex<HashMap<(String, String, i64), (String, (Vec<Value>, Option<String>))>>;
+static LOG_TABLE_CACHE: OnceLock<LogTableCache> = OnceLock::new();
 
 async fn cached_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Option<String>) {
     // 安全：branch 以 '-' 开头会被 git 当作选项解析，拒绝即可（正常分支名不会）
@@ -1283,7 +1613,11 @@ async fn cached_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Opti
     let rev = if branch.is_empty() { "HEAD" } else { branch };
     // tip 快查（rev-parse 是毫秒级，远便宜于 log --numstat）
     let (hrc, hout) = runner::run_git(&["rev-parse".into(), rev.into()], Some(repo), None).await;
-    let tip = if hrc == 0 { hout.trim().to_string() } else { String::new() };
+    let tip = if hrc == 0 {
+        hout.trim().to_string()
+    } else {
+        String::new()
+    };
     let key = (repo.to_string(), branch.to_string(), n);
     let cache = LOG_TABLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
@@ -1305,7 +1639,10 @@ async fn cached_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Opti
 
 async fn git_log_table(Query(q): Query<Q>) -> Response {
     let repo = q.path.unwrap_or_default();
-    let n = q.n.unwrap_or_else(|| "50".into()).parse::<i64>().unwrap_or(50);
+    let n =
+        q.n.unwrap_or_else(|| "50".into())
+            .parse::<i64>()
+            .unwrap_or(50);
     let branch = q.branch.unwrap_or_default();
     let (commits, base) = cached_log_table(&repo, n, &branch).await;
     ok(json!({"ok": true, "commits": commits, "base": base}))
@@ -1356,7 +1693,12 @@ async fn git_in_progress(Query(q): Query<Q>) -> Response {
 }
 
 async fn git_in_progress_op(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let op = d.get("op").and_then(|v| v.as_str()).unwrap_or("");
     let state = match detect_in_progress(&repo) {
         Some(s) => s,
@@ -1368,10 +1710,30 @@ async fn git_in_progress_op(Json(d): Json<Value>) -> Response {
         ("abort", "cherry-pick") => vec!["cherry-pick".into(), "--abort".into()],
         ("abort", "revert") => vec!["revert".into(), "--abort".into()],
         ("abort", "bisect") => vec!["bisect".into(), "reset".into()],
-        ("continue", "merge") => vec!["-c".into(), "core.editor=true".into(), "merge".into(), "--continue".into()],
-        ("continue", "rebase") => vec!["-c".into(), "core.editor=true".into(), "rebase".into(), "--continue".into()],
-        ("continue", "cherry-pick") => vec!["-c".into(), "core.editor=true".into(), "cherry-pick".into(), "--continue".into()],
-        ("continue", "revert") => vec!["-c".into(), "core.editor=true".into(), "revert".into(), "--continue".into()],
+        ("continue", "merge") => vec![
+            "-c".into(),
+            "core.editor=true".into(),
+            "merge".into(),
+            "--continue".into(),
+        ],
+        ("continue", "rebase") => vec![
+            "-c".into(),
+            "core.editor=true".into(),
+            "rebase".into(),
+            "--continue".into(),
+        ],
+        ("continue", "cherry-pick") => vec![
+            "-c".into(),
+            "core.editor=true".into(),
+            "cherry-pick".into(),
+            "--continue".into(),
+        ],
+        ("continue", "revert") => vec![
+            "-c".into(),
+            "core.editor=true".into(),
+            "revert".into(),
+            "--continue".into(),
+        ],
         _ => return ok(json!({"ok": false, "error": format!("{state} 不支持继续，请用中止")})),
     };
     let (rc, out) = runner::run_git(&args, Some(&repo), Some(300.0)).await;
@@ -1394,13 +1756,25 @@ const CONFLICT_ACTION: [(&str, &str, &str); 12] = [
 ];
 
 async fn git_conflict_resolve(Json(d): Json<Value>) -> Response {
-    let repo = d.get("repo").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let file = d.get("file").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let repo = d
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let file = d
+        .get("file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let side = d.get("side").and_then(|v| v.as_str()).unwrap_or("");
     if file.is_empty() || (side != "ours" && side != "theirs") {
         return ok(json!({"ok": false, "error": "参数缺失"}));
     }
-    let st = git_repo::get_status(&repo).await.unwrap_or_else(|_| json!({"files": []}));
+    let st = git_repo::get_status(&repo)
+        .await
+        .unwrap_or_else(|_| json!({"files": []}));
     let conflict = st["files"]
         .as_array()
         .unwrap_or(&vec![])
@@ -1414,10 +1788,20 @@ async fn git_conflict_resolve(Json(d): Json<Value>) -> Response {
         .map(|(_, _, a)| *a)
         .unwrap_or("checkout");
     let (rc, out) = if action == "remove" {
-        runner::run_git(&["rm".into(), "-f".into(), "--".into(), file.clone()], Some(&repo), None).await
+        runner::run_git(
+            &["rm".into(), "-f".into(), "--".into(), file.clone()],
+            Some(&repo),
+            None,
+        )
+        .await
     } else {
         let flag = format!("--{side}");
-        let (rc, out) = runner::run_git(&["checkout".into(), flag, "--".into(), file.clone()], Some(&repo), None).await;
+        let (rc, out) = runner::run_git(
+            &["checkout".into(), flag, "--".into(), file.clone()],
+            Some(&repo),
+            None,
+        )
+        .await;
         if rc == 0 {
             runner::run_git(&["add".into(), "--".into(), file], Some(&repo), None).await
         } else {
@@ -1426,10 +1810,17 @@ async fn git_conflict_resolve(Json(d): Json<Value>) -> Response {
     };
     if rc != 0 {
         let err = out.trim().to_string();
-        return ok(json!({"ok": false, "error": if err.is_empty() { "解决失败".to_string() } else { err }}));
+        return ok(
+            json!({"ok": false, "error": if err.is_empty() { "解决失败".to_string() } else { err }}),
+        );
     }
     let remaining = detect_in_progress(&repo);
-    let (_, out2) = runner::run_git(&["status".into(), "--porcelain=v2".into(), "-z".into()], Some(&repo), None).await;
+    let (_, out2) = runner::run_git(
+        &["status".into(), "--porcelain=v2".into(), "-z".into()],
+        Some(&repo),
+        None,
+    )
+    .await;
     let left = out2.split('\0').filter(|r| r.starts_with("u ")).count();
     let hint = if left > 0 {
         format!("冲突已解决，还剩 {left} 个")
@@ -1542,8 +1933,14 @@ async fn repo_status_hardcore(Query(q): Query<Q>) -> Response {
         if f.get("conflict").is_some() {
             summary["conflicts"] = json!(summary["conflicts"].as_i64().unwrap_or(0) + 1);
         }
-        summary["plus"] = json!(summary["plus"].as_i64().unwrap_or(0) + f.get("plus").and_then(|v| v.as_i64()).unwrap_or(0));
-        summary["minus"] = json!(summary["minus"].as_i64().unwrap_or(0) + f.get("minus").and_then(|v| v.as_i64()).unwrap_or(0));
+        summary["plus"] = json!(
+            summary["plus"].as_i64().unwrap_or(0)
+                + f.get("plus").and_then(|v| v.as_i64()).unwrap_or(0)
+        );
+        summary["minus"] = json!(
+            summary["minus"].as_i64().unwrap_or(0)
+                + f.get("minus").and_then(|v| v.as_i64()).unwrap_or(0)
+        );
     }
 
     ok(json!({
@@ -1558,8 +1955,16 @@ async fn repo_status_hardcore(Query(q): Query<Q>) -> Response {
 }
 
 async fn repo_sync_remote(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let remote = d.get("remote").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let remote = d
+        .get("remote")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if !path.is_empty() && !remote.is_empty() {
         repositories::sync_remote(&path, &remote);
     }
@@ -1586,12 +1991,22 @@ async fn repo_list() -> Response {
 }
 
 async fn repo_open(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     ok(git_repo::open_repo(&path).await)
 }
 
 async fn repo_add(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !std::path::Path::new(&path).is_dir() {
         return ok(json!({"ok": false, "error": "目录不存在"}));
     }
@@ -1602,13 +2017,21 @@ async fn repo_add(Json(d): Json<Value>) -> Response {
 }
 
 async fn repo_remove(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     repositories::remove_repo(&path);
     ok(json!({"ok": true}))
 }
 
 async fn repo_activate(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     match repositories::activate(&path) {
         Ok(_) => match git_repo::get_status(&path).await {
             Ok(mut v) => {
@@ -1622,14 +2045,27 @@ async fn repo_activate(Json(d): Json<Value>) -> Response {
 }
 
 async fn repo_rename(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let name = d.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = d
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     repositories::rename_repo(&path, &name);
     ok(json!({"ok": true}))
 }
 
 async fn repo_init(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !std::path::Path::new(&path).is_dir() {
         return ok(json!({"ok": false, "error": "目录不存在"}));
     }
@@ -1642,9 +2078,22 @@ async fn repo_init(Json(d): Json<Value>) -> Response {
 }
 
 async fn repo_init_and_publish(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let name = d.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let create_remote = d.get("create_remote").and_then(|v| v.as_bool()).unwrap_or(false);
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let name = d
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let create_remote = d
+        .get("create_remote")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let private = d.get("private").and_then(|v| v.as_bool()).unwrap_or(false);
     let visibility = if private { "--private" } else { "--public" };
     if !std::path::Path::new(&path).is_dir() {
@@ -1653,22 +2102,39 @@ async fn repo_init_and_publish(Json(d): Json<Value>) -> Response {
     if create_remote {
         let re = regex::Regex::new(r"^[A-Za-z0-9._-]+$").unwrap();
         if !re.is_match(&name) {
-            return ok(json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}));
+            return ok(
+                json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}),
+            );
         }
         if let Some(err) = net::proxy_preflight() {
             return ok(json!({"ok": false, "error": err}));
         }
     }
     // 1. git init
-    let (rc, out) = runner::run_git(&["init".into(), "-b".into(), "main".into()], Some(&path), None).await;
+    let (rc, out) = runner::run_git(
+        &["init".into(), "-b".into(), "main".into()],
+        Some(&path),
+        None,
+    )
+    .await;
     if rc != 0 {
         return ok(json!({"ok": false, "error": out.trim()}));
     }
     ensure_git_identity(&path).await;
     // 2. 初始提交（目录为空时静默跳过）
     runner::run_git(&["add".into(), "-A".into()], Some(&path), None).await;
-    runner::run_git(&["commit".into(), "-m".into(), "初始提交".into()], Some(&path), None).await;
-    let (rc, _) = runner::run_git(&["rev-parse".into(), "--verify".into(), "HEAD".into()], Some(&path), None).await;
+    runner::run_git(
+        &["commit".into(), "-m".into(), "初始提交".into()],
+        Some(&path),
+        None,
+    )
+    .await;
+    let (rc, _) = runner::run_git(
+        &["rev-parse".into(), "--verify".into(), "HEAD".into()],
+        Some(&path),
+        None,
+    )
+    .await;
     let has_commit = rc == 0;
     // 3. 创建远程、关联并推送（空仓库没有可推的提交，先不 push）
     if create_remote {
@@ -1676,19 +2142,29 @@ async fn repo_init_and_publish(Json(d): Json<Value>) -> Response {
             return ok(json!({"ok": false, "error": "请填写仓库名"}));
         }
         let mut args = vec![
-            "repo".into(), "create".into(), name.clone(), "--source".into(), path.clone(),
-            "--remote".into(), "origin".into(), visibility.into(),
+            "repo".into(),
+            "create".into(),
+            name.clone(),
+            "--source".into(),
+            path.clone(),
+            "--remote".into(),
+            "origin".into(),
+            visibility.into(),
         ];
         if has_commit {
             args.push("--push".into());
         }
         let (rc, out) = runner::run_gh(&args, Some(600.0)).await;
         if rc != 0 {
-            return ok(json!({"ok": false, "error": out.trim(), "hint": "本地仓库已初始化，远程创建失败"}));
+            return ok(
+                json!({"ok": false, "error": out.trim(), "hint": "本地仓库已初始化，远程创建失败"}),
+            );
         }
         let rec = repositories::add_repo(&path, Some(&name), "");
         if !has_commit {
-            return ok(json!({"ok": true, "repo": rec, "hint": "目录是空的，远程仓库已创建但未推送；首次提交后点 [推送] 即可"}));
+            return ok(
+                json!({"ok": true, "repo": rec, "hint": "目录是空的，远程仓库已创建但未推送；首次提交后点 [推送] 即可"}),
+            );
         }
         return ok(json!({"ok": true, "repo": rec}));
     }
@@ -1842,8 +2318,13 @@ fn spawn_clone_worker(
             if !u.is_empty() {
                 let _ = writeln!(f, "[自动兜底] 直连网络失败，自动改走代理重试…");
                 let _ = f.flush();
-                let (rc2, out2) =
-                    clone_exec(&args, &env::build_env_forced_proxy(&u), timeout_secs, &mut f).await;
+                let (rc2, out2) = clone_exec(
+                    &args,
+                    &env::build_env_forced_proxy(&u),
+                    timeout_secs,
+                    &mut f,
+                )
+                .await;
                 rc = rc2;
                 all_out = out2;
                 if rc2 == 0 {
@@ -1857,7 +2338,12 @@ fn spawn_clone_worker(
             // 后续推送/发布/远程显示都必须用 github.com 原地址
             if via_mirror {
                 let _ = runner::run_git_sync(
-                    &["remote".into(), "set-url".into(), "origin".into(), real_url.clone()],
+                    &[
+                        "remote".into(),
+                        "set-url".into(),
+                        "origin".into(),
+                        real_url.clone(),
+                    ],
                     Some(&target_path),
                     None,
                 );
@@ -1865,7 +2351,11 @@ fn spawn_clone_worker(
             repositories::add_repo(&target_path, None, "");
             // clone 只给默认分支建了本地分支，其余远程头补建跟踪分支
             let (er_rc, er_out) = runner::run_git_sync(
-                &["for-each-ref".into(), "refs/remotes/origin".into(), "--format=%(refname:lstrip=3)".into()],
+                &[
+                    "for-each-ref".into(),
+                    "refs/remotes/origin".into(),
+                    "--format=%(refname:lstrip=3)".into(),
+                ],
                 None,
                 Some(&target_path),
             );
@@ -1877,7 +2367,12 @@ fn spawn_clone_worker(
                 }
                 let check_arg = format!("refs/heads/{short}");
                 let (chk, _) = runner::run_git_sync(
-                    &["rev-parse".into(), "--verify".into(), "--quiet".into(), check_arg],
+                    &[
+                        "rev-parse".into(),
+                        "--verify".into(),
+                        "--quiet".into(),
+                        check_arg,
+                    ],
                     None,
                     Some(&target_path),
                 );
@@ -1906,14 +2401,27 @@ fn spawn_clone_worker(
 /// 目录存在且非空（read_dir 取不到首个条目视为空）
 fn dir_nonempty(p: &str) -> bool {
     std::path::Path::new(p).is_dir()
-        && !std::fs::read_dir(p).map(|mut d| d.next().is_none()).unwrap_or(false)
+        && !std::fs::read_dir(p)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
 }
 
 async fn repo_clone(Json(d): Json<Value>) -> Response {
     let url = normalize_clone_url(d.get("url").and_then(|v| v.as_str()).unwrap_or(""));
-    let mut path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let all_history = d.get("all_history").and_then(|v| v.as_bool()).unwrap_or(true);
-    let all_branches = d.get("all_branches").and_then(|v| v.as_bool()).unwrap_or(true);
+    let mut path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let all_history = d
+        .get("all_history")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let all_branches = d
+        .get("all_branches")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     if url.is_empty() || path.is_empty() {
         return ok(json!({"ok": false, "error": "请填写仓库地址和保存位置"}));
@@ -1935,7 +2443,10 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         .unwrap_or_else(|| url.trim_end_matches('/').rsplit('/').next().unwrap_or(""))
         .to_string();
     if dir_nonempty(&path) {
-        path = std::path::Path::new(&path).join(&repo_name).to_string_lossy().into_owned();
+        path = std::path::Path::new(&path)
+            .join(&repo_name)
+            .to_string_lossy()
+            .into_owned();
         redirected = true;
     }
     if dir_nonempty(&path) {
@@ -1943,9 +2454,14 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
     }
     // 规范化路径：与仓库列表逐字符一致，否则顶栏下拉框显示不出仓库名
     let p = std::path::Path::new(&path);
-    path = crate::paths::canonicalize_human(p.parent().unwrap_or_else(|| std::path::Path::new(".")))
-        .map(|par| par.join(p.file_name().unwrap_or_default()).to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.clone());
+    path =
+        crate::paths::canonicalize_human(p.parent().unwrap_or_else(|| std::path::Path::new(".")))
+            .map(|par| {
+                par.join(p.file_name().unwrap_or_default())
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(|| path.clone());
     // 记住这次用的保存位置（用户所选目录，非自动拼接后的子目录）
     config::update_config(&json!({"ui": {"last_clone_dir": user_chosen_dir}}));
 
@@ -1977,7 +2493,15 @@ async fn repo_clone(Json(d): Json<Value>) -> Response {
         .unwrap_or(0);
     let clone_id = millis.to_string();
     let log_path = paths::logs_dir().join(format!("clone_{clone_id}.log"));
-    spawn_clone_worker(clone_id.clone(), args, path.clone(), log_path, env_map, url, via_mirror);
+    spawn_clone_worker(
+        clone_id.clone(),
+        args,
+        path.clone(),
+        log_path,
+        env_map,
+        url,
+        via_mirror,
+    );
     ok(json!({"ok": true, "clone_id": clone_id, "path": path, "redirected": redirected}))
 }
 
@@ -2003,7 +2527,13 @@ async fn repo_clone_progress(Query(q): Query<Q>) -> Response {
         .find(|l| l.starts_with("REPO:"))
         .map(|l| l.to_string())
         .unwrap_or_default();
-    let tail: Vec<String> = lines.iter().rev().take(20).rev().map(|l| l.to_string()).collect();
+    let tail: Vec<String> = lines
+        .iter()
+        .rev()
+        .take(20)
+        .rev()
+        .map(|l| l.to_string())
+        .collect();
     ok(json!({
         "ok": true,
         "lines": tail,
@@ -2014,7 +2544,11 @@ async fn repo_clone_progress(Query(q): Query<Q>) -> Response {
 }
 
 async fn repo_open_explorer(Json(d): Json<Value>) -> Response {
-    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let path = d
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if !std::path::Path::new(&path).is_dir() {
         return ok(json!({"ok": false, "error": "仓库目录不存在"}));
     }
@@ -2099,8 +2633,7 @@ pub async fn handle_protocol_request(
     req: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     let (parts, body) = req.into_parts();
-    let axum_req =
-        tauri::http::Request::from_parts(parts, axum::body::Body::from(body));
+    let axum_req = tauri::http::Request::from_parts(parts, axum::body::Body::from(body));
     let resp = shared_router().oneshot(axum_req).await;
     let (parts, body) = match resp {
         Ok(r) => r.into_parts(),
@@ -2130,4 +2663,3 @@ pub async fn start_server() -> Result<u16, String> {
     });
     Ok(port)
 }
-

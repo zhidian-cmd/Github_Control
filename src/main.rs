@@ -30,7 +30,11 @@ pub(crate) fn boot_log(stage: &str, t0: std::time::Instant) {
         t0.elapsed().as_millis()
     );
     let p = paths::logs_dir().join("boot.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)
+    {
         use std::io::Write;
         let _ = f.write_all(line.as_bytes());
         let _ = f.write_all(b"\n");
@@ -48,7 +52,11 @@ fn main() {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => {
-            win::message_box("Github_control 启动失败", &format!("无法初始化运行时：{e}"), true);
+            win::message_box(
+                "Github_control 启动失败",
+                &format!("无法初始化运行时：{e}"),
+                true,
+            );
             std::process::exit(1);
         }
     };
@@ -88,7 +96,10 @@ fn main() {
             if !missing.is_empty() {
                 win::message_box(
                     "Github_control 启动失败",
-                    &format!("缺少以下文件，请确认 runtime 目录完整：\n{}", missing.join("\n")),
+                    &format!(
+                        "缺少以下文件，请确认 runtime 目录完整：\n{}",
+                        missing.join("\n")
+                    ),
                     true,
                 );
                 std::process::exit(1);
@@ -99,7 +110,11 @@ fn main() {
             let port = match tokio::runtime::Handle::current().block_on(api::start_server()) {
                 Ok(p) => p,
                 Err(e) => {
-                    win::message_box("Github_control 启动失败", &format!("无法启动本地服务：{e}"), true);
+                    win::message_box(
+                        "Github_control 启动失败",
+                        &format!("无法启动本地服务：{e}"),
+                        true,
+                    );
                     std::process::exit(1);
                 }
             };
@@ -111,7 +126,10 @@ fn main() {
                 // 恢复窗口几何（物理像素，与关窗时保存的坐标系完全一致，无漂移）
                 let saved = config::load_config(false)["window"].clone();
                 let geo = win::parse_saved_geo(&saved);
-                let maximized = saved.get("maximized").and_then(|v| v.as_bool()).unwrap_or(false);
+                let maximized = saved
+                    .get("maximized")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let scale = app
                     .primary_monitor()
                     .ok()
@@ -131,12 +149,10 @@ fn main() {
                 // 暖白 #f4f2ea，内容就绪前的瞬间是主题色而非白屏
                 .background_color(tauri::utils::config::Color(244, 242, 234, 255))
                 // 启动埋点：记录 webview 导航开始/完成时刻（不改变显示行为）
-                .on_page_load(move |_w, payload| {
-                    match payload.event() {
-                        tauri::webview::PageLoadEvent::Started => boot_log("page nav started", t0),
-                        tauri::webview::PageLoadEvent::Finished => {
-                            boot_log("page loaded", t0);
-                        }
+                .on_page_load(move |_w, payload| match payload.event() {
+                    tauri::webview::PageLoadEvent::Started => boot_log("page nav started", t0),
+                    tauri::webview::PageLoadEvent::Finished => {
+                        boot_log("page loaded", t0);
                     }
                 });
                 match geo {
@@ -154,7 +170,11 @@ fn main() {
                 let window = match wb.build() {
                     Ok(w) => w,
                     Err(e) => {
-                        win::message_box("Github_control 启动失败", &format!("创建窗口失败：{e}"), true);
+                        win::message_box(
+                            "Github_control 启动失败",
+                            &format!("创建窗口失败：{e}"),
+                            true,
+                        );
                         std::process::exit(1);
                     }
                 };
@@ -172,14 +192,22 @@ fn main() {
                 // 用户明确不需要这种历史记录。失败静默忽略，不影响功能。
                 let _ = window.with_webview(|wv| unsafe {
                     use webview2_com::Microsoft::Web::WebView2::Win32::{
-                        ICoreWebView2_13, ICoreWebView2Profile6,
+                        ICoreWebView2Profile6, ICoreWebView2_13,
                     };
                     use windows_core::Interface;
                     let controller = wv.controller();
-                    let Ok(core) = controller.CoreWebView2() else { return };
-                    let Ok(core13) = core.cast::<ICoreWebView2_13>() else { return };
-                    let Ok(profile) = core13.Profile() else { return };
-                    let Ok(profile6) = profile.cast::<ICoreWebView2Profile6>() else { return };
+                    let Ok(core) = controller.CoreWebView2() else {
+                        return;
+                    };
+                    let Ok(core13) = core.cast::<ICoreWebView2_13>() else {
+                        return;
+                    };
+                    let Ok(profile) = core13.Profile() else {
+                        return;
+                    };
+                    let Ok(profile6) = profile.cast::<ICoreWebView2Profile6>() else {
+                        return;
+                    };
                     let _ = profile6.SetIsGeneralAutofillEnabled(false);
                 });
 
@@ -216,10 +244,10 @@ fn main() {
                     _ => {}
                 },
                 // headless 模式无窗口，阻止默认的"无窗口即退出"，让服务常驻
-                tauri::RunEvent::ExitRequested { api, .. } => {
-                    if std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1") {
-                        api.prevent_exit();
-                    }
+                tauri::RunEvent::ExitRequested { api, .. }
+                    if std::env::var("GC_HEADLESS").is_ok_and(|v| v == "1") =>
+                {
+                    api.prevent_exit();
                 }
                 _ => {}
             }

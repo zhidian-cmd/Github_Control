@@ -12,11 +12,17 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// 复制失败返回 Err——绝不能把一个不存在的临时路径塞给 gh 上传。
 pub fn make_ascii_copy(path: &str) -> Result<String, String> {
     let p = std::path::Path::new(path);
-    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    if name.chars().all(|c| c.is_ascii()) {
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if name.is_ascii() {
         return Ok(path.to_string());
     }
-    let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let ext = p
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -24,8 +30,7 @@ pub fn make_ascii_copy(path: &str) -> Result<String, String> {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
     let tmp = paths::tmp_dir().join(format!("asset_{pid}_{millis}_{seq}{ext}"));
-    std::fs::copy(path, &tmp)
-        .map_err(|e| format!("附件临时副本创建失败（{path}）：{e}"))?;
+    std::fs::copy(path, &tmp).map_err(|e| format!("附件临时副本创建失败（{path}）：{e}"))?;
     Ok(tmp.to_string_lossy().into_owned())
 }
 

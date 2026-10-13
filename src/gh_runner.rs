@@ -62,7 +62,13 @@ fn friendly(out: &str) -> String {
     }
 }
 
-pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &str, repo_dir: &str) -> Value {
+pub async fn release_create(
+    tag: &str,
+    files: &[String],
+    title: &str,
+    notes: &str,
+    repo_dir: &str,
+) -> Value {
     let remote = match guess_remote(repo_dir).await {
         Some(r) => r,
         None => return json!({"ok": false, "error": "该仓库没有设置远程地址，请先推送一次"}),
@@ -72,7 +78,13 @@ pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &st
     }
 
     let mut tmp_files: Vec<String> = Vec::new();
-    let mut args = vec!["release".into(), "create".into(), tag.into(), "-R".into(), remote];
+    let mut args = vec![
+        "release".into(),
+        "create".into(),
+        tag.into(),
+        "-R".into(),
+        remote,
+    ];
     for f in files {
         if !std::path::Path::new(f).is_file() {
             asset_helper::cleanup(&tmp_files);
@@ -93,7 +105,10 @@ pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &st
 
     if !notes.trim().is_empty() {
         let pid = std::process::id();
-        let millis = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let notes_file = paths::tmp_dir()
             .join(format!("release_notes_{pid}_{millis}.md"))
             .to_string_lossy()
@@ -114,7 +129,9 @@ pub async fn release_create(tag: &str, files: &[String], title: &str, notes: &st
         if rc != 0 {
             return json!({"ok": false, "error": friendly(&out)});
         }
-        let m = Regex::new(r"https://\S+/tag/\S+").unwrap().find(&out)
+        let m = Regex::new(r"https://\S+/tag/\S+")
+            .unwrap()
+            .find(&out)
             .or_else(|| Regex::new(r"https://\S+/releases/\S+").unwrap().find(&out));
         json!({"ok": true, "url": m.map(|m| m.as_str().to_string()).unwrap_or_default()})
     }
@@ -162,7 +179,8 @@ pub async fn release_list(repo_dir: &str) -> Result<Vec<Value>, String> {
 /// 经 gh-proxy.com 镜像请求 GitHub API 的 Release 列表（匿名）。
 /// 用系统 curl 直连（清空代理变量）；非 200 或解析失败一律返回 Err，由调用方回落 gh api。
 async fn mirror_release_list(slug: &str) -> Result<Vec<Value>, String> {
-    let url = format!("https://gh-proxy.com/https://api.github.com/repos/{slug}/releases?per_page=100");
+    let url =
+        format!("https://gh-proxy.com/https://api.github.com/repos/{slug}/releases?per_page=100");
     let env_map = env::build_env_direct();
     let (rc, out) = runner::run(
         &[
@@ -242,7 +260,14 @@ pub async fn release_delete(tag: &str, repo_dir: &str) -> Value {
         None => return json!({"ok": false, "error": "该仓库没有设置远程地址"}),
     };
     let (rc, out) = runner::run_gh(
-        &["release".into(), "delete".into(), tag.into(), "-R".into(), remote, "--yes".into()],
+        &[
+            "release".into(),
+            "delete".into(),
+            tag.into(),
+            "-R".into(),
+            remote,
+            "--yes".into(),
+        ],
         None,
     )
     .await;

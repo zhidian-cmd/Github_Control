@@ -108,7 +108,9 @@ pub fn canonicalize_human(path: &std::path::Path) -> Option<PathBuf> {
 
 /// 当前时间 ISO 格式（毫秒级，与 Python datetime.now().isoformat() 对应）
 pub fn now_iso() -> String {
-    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string()
+    chrono::Local::now()
+        .format("%Y-%m-%dT%H:%M:%S%.6f")
+        .to_string()
 }
 
 /// 当前时间 ISO 格式（秒级）

@@ -13,11 +13,21 @@ fn trim(s: &str) -> String {
 }
 
 pub async fn get_current_branch(repo: &str) -> String {
-    let (rc, out) = runner::run_git(&["rev-parse".into(), "--abbrev-ref".into(), "HEAD".into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["rev-parse".into(), "--abbrev-ref".into(), "HEAD".into()],
+        Some(repo),
+        None,
+    )
+    .await;
     let name = trim(&out);
     if rc == 0 && name == "HEAD" {
         // 游离状态：显示具体提交更友好
-        let (rc2, h) = runner::run_git(&["rev-parse".into(), "--short".into(), "HEAD".into()], Some(repo), None).await;
+        let (rc2, h) = runner::run_git(
+            &["rev-parse".into(), "--short".into(), "HEAD".into()],
+            Some(repo),
+            None,
+        )
+        .await;
         let h = trim(&h);
         if rc2 == 0 && !h.is_empty() {
             return format!("游离 HEAD {h}");
@@ -34,8 +44,8 @@ pub async fn get_remote(repo: &str) -> String {
     }
     // 正则只编译一次（热路径）
     static REMOTE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = REMOTE_RE
-        .get_or_init(|| regex::Regex::new(r"github\.com[:/](.+?)(?:\.git)?/?$").unwrap());
+    let re =
+        REMOTE_RE.get_or_init(|| regex::Regex::new(r"github\.com[:/](.+?)(?:\.git)?/?$").unwrap());
     // origin 优先（行为不变）；origin 缺失时兜底用其他远程里能解析出的 github 地址
     let mut other_github: Option<String> = None;
     for line in out.lines() {
@@ -74,17 +84,19 @@ pub fn parse_status_output(out: &str) -> (String, i64, i64, Vec<StatusFile>) {
     let mut ahead = 0i64;
     let mut behind = 0i64;
     let mut files: Vec<StatusFile> = Vec::new();
-    let re = Regex::new(
-        r"^(.+?)(?:\.\.\.\S+)?(?:\s+\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\])?$",
-    )
-    .unwrap();
+    let re =
+        Regex::new(r"^(.+?)(?:\.\.\.\S+)?(?:\s+\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\])?$")
+            .unwrap();
     for line in out.lines() {
         if let Some(body) = line.strip_prefix("## ") {
             if let Some(b) = body.strip_prefix("No commits yet on ") {
                 branch = b.to_string();
             } else if !body.is_empty() {
                 if let Some(c) = re.captures(body) {
-                    branch = c.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+                    branch = c
+                        .get(1)
+                        .map(|m| m.as_str().trim().to_string())
+                        .unwrap_or_default();
                     ahead = c.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
                     behind = c.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
                 }
@@ -139,7 +151,11 @@ pub async fn get_status(repo: &str) -> Result<Value, String> {
 }
 
 fn is_tracked(repo: &str, path: &str) -> bool {
-    let (rc, out) = runner::run_git_sync(&["ls-files".into(), "--".into(), path.into()], Some(repo), None);
+    let (rc, out) = runner::run_git_sync(
+        &["ls-files".into(), "--".into(), path.into()],
+        Some(repo),
+        None,
+    );
     rc == 0 && !trim(&out).is_empty()
 }
 
@@ -188,7 +204,12 @@ pub async fn get_diff(repo: &str, path: Option<&str>, word_diff: bool) -> String
         vec![]
     };
     if let Some(p) = path {
-        let (rc, _) = runner::run_git(&["rev-parse".into(), "--verify".into(), "HEAD".into()], Some(repo), None).await;
+        let (rc, _) = runner::run_git(
+            &["rev-parse".into(), "--verify".into(), "HEAD".into()],
+            Some(repo),
+            None,
+        )
+        .await;
         if rc != 0 {
             // 空仓库（无 HEAD）：所有文件都按未跟踪处理
             if paths::file_mtime(&std::path::Path::new(repo).join(p)) > 0 {
@@ -202,7 +223,11 @@ pub async fn get_diff(repo: &str, path: Option<&str>, word_diff: bool) -> String
         args.push("--".into());
         args.push(p.into());
         let (rc, mut out) = runner::run_git(&args, Some(repo), None).await;
-        if rc == 0 && trim(&out).is_empty() && !is_tracked(repo, p) && paths::file_mtime(&std::path::Path::new(repo).join(p)) > 0 {
+        if rc == 0
+            && trim(&out).is_empty()
+            && !is_tracked(repo, p)
+            && paths::file_mtime(&std::path::Path::new(repo).join(p)) > 0
+        {
             out = pseudo_diff(repo, p);
         }
         return out.chars().take(MAX_DIFF).collect();
@@ -216,8 +241,11 @@ pub async fn get_diff(repo: &str, path: Option<&str>, word_diff: bool) -> String
 pub async fn get_commit_detail(repo: &str, commit: &str) -> Result<Value, String> {
     let (rc, out) = runner::run_git(
         &[
-            "show".into(), "-s".into(), "--format=%H%n%an%n%ad%n%s%n%b".into(),
-            "--date=iso".into(), commit.into(),
+            "show".into(),
+            "-s".into(),
+            "--format=%H%n%an%n%ad%n%s%n%b".into(),
+            "--date=iso".into(),
+            commit.into(),
         ],
         Some(repo),
         None,
@@ -236,12 +264,23 @@ pub async fn get_commit_detail(repo: &str, commit: &str) -> Result<Value, String
         "body": lines.get(4..).unwrap_or(&[]).join("\n").trim(),
     });
 
-    let (rc, out) = runner::run_git(&["show".into(), commit.into(), "--format=".into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["show".into(), commit.into(), "--format=".into()],
+        Some(repo),
+        None,
+    )
+    .await;
     let _ = rc;
     meta["patch"] = Value::String(out.chars().take(MAX_DIFF).collect());
 
     let (rc, out) = runner::run_git(
-        &["diff-tree".into(), "--no-commit-id".into(), "--name-status".into(), "-r".into(), commit.into()],
+        &[
+            "diff-tree".into(),
+            "--no-commit-id".into(),
+            "--name-status".into(),
+            "-r".into(),
+            commit.into(),
+        ],
         Some(repo),
         None,
     )
@@ -264,7 +303,12 @@ pub async fn get_commit_detail(repo: &str, commit: &str) -> Result<Value, String
 
 /// 仓库根；不是 git 仓库返回 None。子目录会向上找到根。
 pub async fn find_root(path: &str) -> Option<String> {
-    let (rc, out) = runner::run_git(&["rev-parse".into(), "--show-toplevel".into()], Some(path), None).await;
+    let (rc, out) = runner::run_git(
+        &["rev-parse".into(), "--show-toplevel".into()],
+        Some(path),
+        None,
+    )
+    .await;
     if rc == 0 {
         let r = trim(&out);
         if !r.is_empty() {
@@ -275,7 +319,12 @@ pub async fn find_root(path: &str) -> Option<String> {
 }
 
 pub async fn init_repo(path: &str) -> Value {
-    let (rc, out) = runner::run_git(&["init".into(), "-b".into(), "main".into()], Some(path), None).await;
+    let (rc, out) = runner::run_git(
+        &["init".into(), "-b".into(), "main".into()],
+        Some(path),
+        None,
+    )
+    .await;
     json!({"ok": rc == 0, "error": if rc == 0 { Value::Null } else { Value::String(trim(&out)) }})
 }
 
@@ -285,11 +334,14 @@ pub async fn get_branches(repo: &str) -> Vec<Value> {
     if rc != 0 {
         return vec![];
     }
-    let re = Regex::new(r"^(\*|\s)\s+(\S+)\s+([0-9a-f]+)\s+(?:\[(\S+?)(?:: gone \d+/\d+)?\]\s+)?(.*)$").unwrap();
+    let re =
+        Regex::new(r"^(\*|\s)\s+(\S+)\s+([0-9a-f]+)\s+(?:\[(\S+?)(?:: gone \d+/\d+)?\]\s+)?(.*)$")
+            .unwrap();
     let mut branches = Vec::new();
     for line in out.lines() {
         let line = line.trim_end();
-        if line.trim().is_empty() || line.contains("(HEAD detached") || line.contains("(no branch") {
+        if line.trim().is_empty() || line.contains("(HEAD detached") || line.contains("(no branch")
+        {
             continue;
         }
         if let Some(c) = re.captures(line) {
@@ -307,7 +359,12 @@ pub async fn get_branches(repo: &str) -> Vec<Value> {
 
 pub async fn has_upstream(repo: &str, branch: &str) -> bool {
     let arg = format!("{branch}@{{upstream}}");
-    let (rc, _) = runner::run_git(&["rev-parse".into(), "--abbrev-ref".into(), arg], Some(repo), None).await;
+    let (rc, _) = runner::run_git(
+        &["rev-parse".into(), "--abbrev-ref".into(), arg],
+        Some(repo),
+        None,
+    )
+    .await;
     rc == 0
 }
 
@@ -348,7 +405,11 @@ async fn numstat(repo: &str, args: &[String]) -> (i64, i64, BTreeMap<String, (i6
     let mut cmd = vec!["diff".into(), "--numstat".into()];
     cmd.extend(args.iter().cloned());
     let (rc, out) = runner::run_git(&cmd, Some(repo), None).await;
-    let per_file = if rc == 0 { parse_numstat(&out) } else { BTreeMap::new() };
+    let per_file = if rc == 0 {
+        parse_numstat(&out)
+    } else {
+        BTreeMap::new()
+    };
     let plus = per_file.values().map(|(p, _)| *p).sum();
     let minus = per_file.values().map(|(_, m)| *m).sum();
     (plus, minus, per_file)
@@ -369,11 +430,7 @@ pub fn count_lines(repo: &str, rel_path: &str, cap: Option<u64>) -> (i64, bool) 
     let mut buf = vec![0u8; 8192];
     let mut total = 0u64;
     let mut count = 0i64;
-    loop {
-        let n = match f.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => break,
-        };
+    while let Ok(n) = f.read(&mut buf) {
         if n == 0 {
             break;
         }
@@ -409,7 +466,10 @@ pub async fn get_overview(repo: &str) -> Result<Value, String> {
     // 只读命令并行跑
     let head_args = vec!["HEAD".into()];
     let act_args = vec![
-        "log".into(), "--since=7 days ago".into(), "--pretty=format:%ad".into(), "--date=short".into(),
+        "log".into(),
+        "--since=7 days ago".into(),
+        "--pretty=format:%ad".into(),
+        "--date=short".into(),
     ];
     let cnt_args = vec!["rev-list".into(), "--count".into(), "HEAD".into()];
     let last_args = vec!["log".into(), "-1".into(), "--format=%cI".into()];
@@ -436,8 +496,16 @@ pub async fn get_overview(repo: &str) -> Result<Value, String> {
         .iter()
         .map(|(d, c)| json!({"date": d, "count": c}))
         .collect();
-    let total = if cnt_rc == 0 { cnt_out.trim().parse::<i64>().unwrap_or(0) } else { 0 };
-    let last = if last_rc == 0 { trim(&last_out) } else { String::new() };
+    let total = if cnt_rc == 0 {
+        cnt_out.trim().parse::<i64>().unwrap_or(0)
+    } else {
+        0
+    };
+    let last = if last_rc == 0 {
+        trim(&last_out)
+    } else {
+        String::new()
+    };
 
     Ok(json!({
         "path": repo,
@@ -456,7 +524,9 @@ pub async fn get_overview(repo: &str) -> Result<Value, String> {
 
 /// 单个文件的改动统计：+N -M、大小、mtime
 pub async fn get_file_stats(repo: &str, file: &str) -> Value {
-    let s = get_status(repo).await.unwrap_or_else(|_| json!({"files": []}));
+    let s = get_status(repo)
+        .await
+        .unwrap_or_else(|_| json!({"files": []}));
     let xy = s["files"]
         .as_array()
         .unwrap_or(&vec![])
@@ -485,7 +555,13 @@ pub async fn get_file_stats(repo: &str, file: &str) -> Value {
 /// 提交统计：元信息 + 每文件状态和增删行数
 pub async fn get_commit_stats(repo: &str, commit: &str) -> Result<Value, String> {
     let (rc, out) = runner::run_git(
-        &["show".into(), "-s".into(), "--format=%H%n%an%n%ad%n%s".into(), "--date=iso".into(), commit.into()],
+        &[
+            "show".into(),
+            "-s".into(),
+            "--format=%H%n%an%n%ad%n%s".into(),
+            "--date=iso".into(),
+            commit.into(),
+        ],
         Some(repo),
         None,
     )
@@ -505,7 +581,14 @@ pub async fn get_commit_stats(repo: &str, commit: &str) -> Result<Value, String>
 
     let mut status: BTreeMap<String, String> = BTreeMap::new();
     let (rc, out) = runner::run_git(
-        &["diff-tree".into(), "--no-commit-id".into(), "--name-status".into(), "-r".into(), "-M".into(), commit.into()],
+        &[
+            "diff-tree".into(),
+            "--no-commit-id".into(),
+            "--name-status".into(),
+            "-r".into(),
+            "-M".into(),
+            commit.into(),
+        ],
         Some(repo),
         None,
     )
@@ -523,7 +606,13 @@ pub async fn get_commit_stats(repo: &str, commit: &str) -> Result<Value, String>
     let mut minus = 0i64;
     let mut file_list: Vec<Value> = Vec::new();
     let (rc, out) = runner::run_git(
-        &["show".into(), "--numstat".into(), "--format=".into(), "-M".into(), commit.into()],
+        &[
+            "show".into(),
+            "--numstat".into(),
+            "--format=".into(),
+            "-M".into(),
+            commit.into(),
+        ],
         Some(repo),
         None,
     )
@@ -532,8 +621,16 @@ pub async fn get_commit_stats(repo: &str, commit: &str) -> Result<Value, String>
         for line in out.lines() {
             let p: Vec<&str> = line.split('\t').collect();
             if p.len() >= 3 {
-                let pl = if p[0] == "-" { 0 } else { p[0].parse::<i64>().unwrap_or(0) };
-                let mi = if p[1] == "-" { 0 } else { p[1].parse::<i64>().unwrap_or(0) };
+                let pl = if p[0] == "-" {
+                    0
+                } else {
+                    p[0].parse::<i64>().unwrap_or(0)
+                };
+                let mi = if p[1] == "-" {
+                    0
+                } else {
+                    p[1].parse::<i64>().unwrap_or(0)
+                };
                 let path = p[2].to_string();
                 plus += pl;
                 minus += mi;
@@ -559,7 +656,12 @@ async fn detect_base_branch(repo: &str, current: &str) -> Option<String> {
             continue;
         }
         let (rc, _) = runner::run_git(
-            &["rev-parse".into(), "--verify".into(), "--quiet".into(), cand.into()],
+            &[
+                "rev-parse".into(),
+                "--verify".into(),
+                "--quiet".into(),
+                cand.into(),
+            ],
             Some(repo),
             None,
         )
@@ -593,17 +695,21 @@ pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Opt
     }
     let base = detect_base_branch(repo, &current).await;
     let mut args = vec![
-        "log".into(), "--first-parent".into(), "--numstat".into(), "-M".into(),
+        "log".into(),
+        "--first-parent".into(),
+        "--numstat".into(),
+        "-M".into(),
     ];
     if !branch.is_empty() {
         args.push(branch.to_string());
     }
     args.extend([
-        "-n".into(), n.to_string(),
+        "-n".into(),
+        n.to_string(),
         "--pretty=format:\x01%H|%an|%cI|%s".into(),
     ]);
     if let Some(b) = &base {
-        args.push(format!("^{b}"));  // 排除基准分支可达的提交：只看本支线独有
+        args.push(format!("^{b}")); // 排除基准分支可达的提交：只看本支线独有
     }
     args.push("HEAD".into());
     args.push("--".into());
@@ -617,8 +723,8 @@ pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Opt
         if let Some(body) = line.strip_prefix('\u{1}') {
             let parts: Vec<&str> = body.splitn(4, '|').collect();
             let mut c = json!({
-                "hash": parts.get(0).unwrap_or(&""),
-                "short": parts.get(0).map(|s| s.chars().take(7).collect::<String>()).unwrap_or_default(),
+                "hash": parts.first().unwrap_or(&""),
+                "short": parts.first().map(|s| s.chars().take(7).collect::<String>()).unwrap_or_default(),
                 "author": parts.get(1).unwrap_or(&""),
                 "date": parts.get(2).unwrap_or(&""),
                 "msg": parts.get(3).unwrap_or(&""),
@@ -633,8 +739,12 @@ pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Opt
                 let p: Vec<&str> = line.split('\t').collect();
                 if p.len() >= 3 && p[0] != "-" {
                     if let (Ok(pl), Ok(mi)) = (p[0].parse::<i64>(), p[1].parse::<i64>()) {
-                        c["plus"] = Value::Number(c["plus"].as_i64().unwrap_or(0).saturating_add(pl).into());
-                        c["minus"] = Value::Number(c["minus"].as_i64().unwrap_or(0).saturating_add(mi).into());
+                        c["plus"] = Value::Number(
+                            c["plus"].as_i64().unwrap_or(0).saturating_add(pl).into(),
+                        );
+                        c["minus"] = Value::Number(
+                            c["minus"].as_i64().unwrap_or(0).saturating_add(mi).into(),
+                        );
                     }
                 }
             }
@@ -642,4 +752,3 @@ pub async fn get_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Opt
     }
     (commits, base)
 }
-

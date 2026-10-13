@@ -24,23 +24,44 @@ pub async fn hard_reset(repo: &str, target_commit: &str, confirm: bool) -> Resul
     let current_head = out.trim().to_string();
 
     let tag_name = format!("_backup_{}", paths::now_compact());
-    let (rc, out) = runner::run_git(&["tag".into(), tag_name.clone(), current_head], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["tag".into(), tag_name.clone(), current_head],
+        Some(repo),
+        None,
+    )
+    .await;
     if rc != 0 {
         return Err(format!("打保险 tag 失败：{}", out.trim()));
     }
 
-    let (rc, st_out) = runner::run_git(&["status".into(), "--porcelain=v1".into()], Some(repo), None).await;
+    let (rc, st_out) = runner::run_git(
+        &["status".into(), "--porcelain=v1".into()],
+        Some(repo),
+        None,
+    )
+    .await;
     let dirty = rc == 0 && !st_out.trim().is_empty();
     if dirty {
         runner::run_git(
-            &["stash".into(), "push".into(), "-u".into(), "-m".into(), "auto before hard reset".into()],
+            &[
+                "stash".into(),
+                "push".into(),
+                "-u".into(),
+                "-m".into(),
+                "auto before hard reset".into(),
+            ],
             Some(repo),
             None,
         )
         .await;
     }
 
-    let (rc, out) = runner::run_git(&["reset".into(), "--hard".into(), target_commit.into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["reset".into(), "--hard".into(), target_commit.into()],
+        Some(repo),
+        None,
+    )
+    .await;
     let mut result = json!({"ok": rc == 0, "backup_tag": tag_name, "output": out.trim()});
 
     if dirty && rc == 0 {
@@ -52,18 +73,33 @@ pub async fn hard_reset(repo: &str, target_commit: &str, confirm: bool) -> Resul
 }
 
 pub async fn soft_reset(repo: &str, target_commit: &str) -> Value {
-    let (rc, out) = runner::run_git(&["reset".into(), "--soft".into(), target_commit.into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["reset".into(), "--soft".into(), target_commit.into()],
+        Some(repo),
+        None,
+    )
+    .await;
     json!({"ok": rc == 0, "output": out.trim()})
 }
 
 pub async fn mixed_reset(repo: &str, target_commit: &str, confirm: bool) -> Result<Value, String> {
     require_confirm(confirm, "mixed_reset")?;
-    let (rc, out) = runner::run_git(&["reset".into(), "--mixed".into(), target_commit.into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["reset".into(), "--mixed".into(), target_commit.into()],
+        Some(repo),
+        None,
+    )
+    .await;
     Ok(json!({"ok": rc == 0, "output": out.trim()}))
 }
 
 pub async fn revert(repo: &str, target_commit: &str) -> Value {
-    let (rc, out) = runner::run_git(&["revert".into(), "--no-edit".into(), target_commit.into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["revert".into(), "--no-edit".into(), target_commit.into()],
+        Some(repo),
+        None,
+    )
+    .await;
     json!({"ok": rc == 0, "output": out.trim()})
 }
 
@@ -71,7 +107,9 @@ pub async fn revert(repo: &str, target_commit: &str) -> Value {
 pub async fn list_recovery_points(repo: &str) -> Value {
     let (rc, out) = runner::run_git(
         &[
-            "tag".into(), "-l".into(), "_backup_*".into(),
+            "tag".into(),
+            "-l".into(),
+            "_backup_*".into(),
             "--format=%(refname:short)|%(objectname:short)|%(creatordate:iso)".into(),
         ],
         Some(repo),
@@ -89,7 +127,12 @@ pub async fn list_recovery_points(repo: &str) -> Value {
     }
 
     let (rc, out) = runner::run_git(
-        &["reflog".into(), "--pretty=format:%h|%gd|%gs".into(), "-n".into(), "30".into()],
+        &[
+            "reflog".into(),
+            "--pretty=format:%h|%gd|%gs".into(),
+            "-n".into(),
+            "30".into(),
+        ],
         Some(repo),
         None,
     )
@@ -108,6 +151,11 @@ pub async fn list_recovery_points(repo: &str) -> Value {
 
 pub async fn recover_to(repo: &str, commit_hash: &str, confirm: bool) -> Result<Value, String> {
     require_confirm(confirm, "recover_to")?;
-    let (rc, out) = runner::run_git(&["reset".into(), "--hard".into(), commit_hash.into()], Some(repo), None).await;
+    let (rc, out) = runner::run_git(
+        &["reset".into(), "--hard".into(), commit_hash.into()],
+        Some(repo),
+        None,
+    )
+    .await;
     Ok(json!({"ok": rc == 0, "output": out.trim()}))
 }

@@ -6,7 +6,13 @@ use serde_json::{json, Value};
 
 pub async fn get_status_v2(repo: &str) -> Result<(Value, Vec<Value>), String> {
     let (rc, out) = runner::run_git(
-        &["status".into(), "--porcelain=v2".into(), "--branch".into(), "--show-stash".into(), "-z".into()],
+        &[
+            "status".into(),
+            "--porcelain=v2".into(),
+            "--branch".into(),
+            "--show-stash".into(),
+            "-z".into(),
+        ],
         Some(repo),
         None,
     )
@@ -31,8 +37,18 @@ pub async fn get_status_v2(repo: &str) -> Result<(Value, Vec<Value>), String> {
                 meta["upstream"] = json!(b);
             } else if let Some(b) = body.strip_prefix("branch.ab ") {
                 let parts: Vec<&str> = b.split_whitespace().collect();
-                let ahead = parts.first().unwrap_or(&"+0").trim_start_matches('+').parse::<i64>().unwrap_or(0);
-                let behind = parts.get(1).unwrap_or(&"-0").trim_start_matches('-').parse::<i64>().unwrap_or(0);
+                let ahead = parts
+                    .first()
+                    .unwrap_or(&"+0")
+                    .trim_start_matches('+')
+                    .parse::<i64>()
+                    .unwrap_or(0);
+                let behind = parts
+                    .get(1)
+                    .unwrap_or(&"-0")
+                    .trim_start_matches('-')
+                    .parse::<i64>()
+                    .unwrap_or(0);
                 meta["ahead"] = json!(ahead);
                 meta["behind"] = json!(behind);
             } else if let Some(b) = body.strip_prefix("stash ") {
@@ -65,18 +81,26 @@ pub async fn get_status_v2(repo: &str) -> Result<(Value, Vec<Value>), String> {
             if i + 1 < recs.len() {
                 let next = recs[i + 1];
                 let first = next.chars().next().unwrap_or('\0');
-                if first != '#' && first != '1' && first != '2' && first != 'u' && first != '?' && first != '!' && !next.contains('\t') {
+                if first != '#'
+                    && first != '1'
+                    && first != '2'
+                    && first != 'u'
+                    && first != '?'
+                    && first != '!'
+                    && !next.contains('\t')
+                {
                     orig = next.to_string();
                     i += 1;
                 }
             }
             let xy = f[0].as_bytes();
             let score = f[7]; // 形如 R100 / C85
-            let rename_score = if score.len() > 1 && (score.starts_with('R') || score.starts_with('C')) {
-                score[1..].parse::<i64>().ok()
-            } else {
-                None
-            };
+            let rename_score =
+                if score.len() > 1 && (score.starts_with('R') || score.starts_with('C')) {
+                    score[1..].parse::<i64>().ok()
+                } else {
+                    None
+                };
             files.push(json!({
                 "path": f[8], "x": (xy[0] as char).to_string(), "y": (xy[1] as char).to_string(),
                 "sub": f[1], "mode_head": f[2], "mode_index": f[3],

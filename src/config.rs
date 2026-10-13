@@ -52,18 +52,16 @@ pub fn load_config(force: bool) -> Value {
     if !force && c.is_some() {
         return c.clone().unwrap();
     }
-    let cfg = match std::fs::read_to_string(&*paths::config_file()) {
+    let cfg = match std::fs::read_to_string(paths::config_file()) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
             Ok(v) => merge(&defaults(), &v),
             Err(_) => {
                 // config.json 损坏：备份旧文件，用默认配置继续跑
-                let path = &*paths::config_file();
+                let path = paths::config_file();
                 if path.is_file() {
-                    let bak = paths::config_file().with_file_name(format!(
-                        "config.json.bak.{}",
-                        paths::now_compact()
-                    ));
-                    let _ = std::fs::rename(&*paths::config_file(), &bak);
+                    let bak = paths::config_file()
+                        .with_file_name(format!("config.json.bak.{}", paths::now_compact()));
+                    let _ = std::fs::rename(paths::config_file(), &bak);
                 }
                 defaults()
             }
@@ -78,7 +76,7 @@ pub fn save_config(cfg: &Value) {
     let mut c = cache().lock().unwrap();
     *c = Some(cfg.clone());
     let text = serde_json::to_string_pretty(cfg).unwrap_or_else(|_| "{}".into());
-    if let Err(e) = std::fs::write(&*paths::config_file(), text) {
+    if let Err(e) = std::fs::write(paths::config_file(), text) {
         eprintln!("保存配置失败: {e}");
     }
 }

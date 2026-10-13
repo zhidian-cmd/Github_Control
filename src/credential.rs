@@ -105,7 +105,12 @@ pub fn set_auth_cache(state: &str) {
 
 async fn gh_api_user() -> (String, String) {
     let (rc, out) = runner::run_gh(
-        &["api".into(), "user".into(), "--jq".into(), "{id: .id, login: .login}".into()],
+        &[
+            "api".into(),
+            "user".into(),
+            "--jq".into(),
+            "{id: .id, login: .login}".into(),
+        ],
         Some(15.0),
     )
     .await;
@@ -114,7 +119,11 @@ async fn gh_api_user() -> (String, String) {
     }
     match serde_json::from_str::<Value>(&out) {
         Ok(v) => {
-            let login = v.get("login").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let login = v
+                .get("login")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             let id = v
                 .get("id")
                 .and_then(|x| x.as_i64().map(|n| n.to_string()))
@@ -136,7 +145,12 @@ pub async fn login(token: &str) -> Value {
     }
     let gh = paths::gh_exe().to_string_lossy().into_owned();
     let (rc, out) = runner::run(
-        &[gh.clone(), "auth".into(), "login".into(), "--with-token".into()],
+        &[
+            gh.clone(),
+            "auth".into(),
+            "login".into(),
+            "--with-token".into(),
+        ],
         Some(30.0),
         Some(token.trim().to_string()),
         None,
@@ -159,14 +173,26 @@ pub async fn login(token: &str) -> Value {
     if !username.is_empty() {
         let git = paths::git_exe().to_string_lossy().into_owned();
         runner::run(
-            &[git.clone(), "config".into(), "--global".into(), "user.name".into(), username.clone()],
+            &[
+                git.clone(),
+                "config".into(),
+                "--global".into(),
+                "user.name".into(),
+                username.clone(),
+            ],
             Some(10.0),
             None,
             None,
         )
         .await;
         runner::run(
-            &[git, "config".into(), "--global".into(), "user.email".into(), email.clone()],
+            &[
+                git,
+                "config".into(),
+                "--global".into(),
+                "user.email".into(),
+                email.clone(),
+            ],
             Some(10.0),
             None,
             None,
@@ -185,7 +211,13 @@ pub async fn login(token: &str) -> Value {
 pub async fn logout() -> Value {
     let gh = paths::gh_exe().to_string_lossy().into_owned();
     runner::run(
-        &[gh, "auth".into(), "logout".into(), "--hostname".into(), "github.com".into()],
+        &[
+            gh,
+            "auth".into(),
+            "logout".into(),
+            "--hostname".into(),
+            "github.com".into(),
+        ],
         Some(15.0),
         Some("y\n".into()),
         None,
@@ -223,8 +255,14 @@ pub fn write_gitconfig_defaults(username: &str, email: &str, allow_network: bool
         if let Ok(text) = std::fs::read_to_string(&path) {
             let m_name = Regex::new(r"(?m)name\s*=\s*(.+)").unwrap().captures(&text);
             let m_mail = Regex::new(r"(?m)email\s*=\s*(.+)").unwrap().captures(&text);
-            uname = m_name.and_then(|c| c.get(1)).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
-            umail = m_mail.and_then(|c| c.get(1)).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+            uname = m_name
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+            umail = m_mail
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
         }
     }
 

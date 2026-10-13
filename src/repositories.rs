@@ -76,7 +76,10 @@ pub fn rename_repo(path: &str, name: &str) {
     let key = norm(path);
     if !name.trim().is_empty() {
         if let Some(arr) = cfg["repositories"].as_array_mut() {
-            if let Some(rec) = arr.iter_mut().find(|r| norm(r["path"].as_str().unwrap_or("")) == key) {
+            if let Some(rec) = arr
+                .iter_mut()
+                .find(|r| norm(r["path"].as_str().unwrap_or("")) == key)
+            {
                 rec["name"] = json!(name.trim());
             }
         }
@@ -101,7 +104,10 @@ pub fn activate(path: &str) -> Result<Value, String> {
 pub fn sync_remote(path: &str, remote: &str) {
     let mut cfg = config::load_config(false);
     if let Some(arr) = cfg["repositories"].as_array_mut() {
-        if let Some(rec) = arr.iter_mut().find(|r| norm(r["path"].as_str().unwrap_or("")) == norm(path)) {
+        if let Some(rec) = arr
+            .iter_mut()
+            .find(|r| norm(r["path"].as_str().unwrap_or("")) == norm(path))
+        {
             if rec.get("remote").and_then(|v| v.as_str()).unwrap_or("") != remote {
                 rec["remote"] = json!(remote);
             }
