@@ -119,6 +119,13 @@ cargo run
 | `/api/repo/overview` | 219 ms | 约 20 ms 区间 | — |
 | `/api/repo/status` | 148 ms | 约 60 ms 区间 | — |
 
+启动链路优化（2026-10-18）：进程启动即并发预取 `/api/repo/startup_bundle`
+（status_hardcore + log_table + overview_extra 三份数据，6 条 git 命令
+`OnceCell` 合并），整体藏进 WebView2 冷启动（~530ms）的空档——页面就绪时
+数据已到手；概览面板的状态类字段由前端从 status_hardcore 现算（与 overview
+端点同一数据源 `diff --numstat HEAD`），不再重复跑 status + numstat。
+启动 git spawn 12 → 6 且全并行；界面可交互从 ~1.6s 降到 ~0.7s。
+
 其余优化：未跟踪文件行数统计只读前 2MB（大文件不再全量读入，超限标记
 `plus_truncated`）；binary 文件跳过统计；`get_remote` 正则 `OnceLock` 只编译一次；
 `[profile.release]` 加 `lto="thin" codegen-units=1 strip=true`（exe 13.5MB → 11.9MB，

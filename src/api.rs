@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tokio::time::Duration;
 use tower::ServiceExt;
@@ -126,9 +127,17 @@ async fn push_with_lease(repo: &str, branch: &str, set_upstream: bool) -> (i32, 
 /// 都可能是空的，git commit 会直接报 "Please tell me who you are"。
 /// 有配置用户名（登录过）就用它兜底写入全局配置。
 async fn ensure_git_identity(repo: &str) {
-    let (rc, _) = runner::run_git(&["config".into(), "user.email".into()], Some(repo), None).await;
-    if rc == 0 {
-        return;
+    // 快路径：读 .gitconfig / 仓库 config 判断身份（零进程）；读不到文件才问 git
+    match git_repo::git_identity_configured(repo) {
+        Some(true) => return,
+        Some(false) => {}
+        None => {
+            let (rc, _) =
+                runner::run_git(&["config".into(), "user.email".into()], Some(repo), None).await;
+            if rc == 0 {
+                return;
+            }
+        }
     }
     let name = config::load_config(false)["auth"]["username"]
         .as_str()
@@ -506,6 +515,8 @@ async fn config_proxy_test() -> Response {
         let mut error = format!("代理 {url} 无法连接（端口没开或地址不对）");
         if !direct_ok {
             error.push_str("；本机直连同样不通");
+        } else {
+            error.push_str("；本机直连可用，日常操作失败会自动转直连（兜底恒开）");
         }
         return ok(json!({"ok": false, "error": error, "direct_ok": direct_ok}));
     }
@@ -549,6 +560,8 @@ async fn config_proxy_test() -> Response {
         let mut error = format!("代理端口可达，但经此代理访问 GitHub 失败：{err}\n提示：{hint}");
         if !direct_ok {
             error.push_str("\n（本机直连同样不通）");
+        } else {
+            error.push_str("\n（本机直连可用，日常操作失败会自动转直连）");
         }
         ok(json!({"ok": true, "gh_ok": false, "direct_ok": direct_ok, "error": error}))
     }
@@ -1218,7 +1231,58 @@ async fn finish_delete(repo: &str, stashed: bool, base_hint: String) -> Response
     ok(json!({"ok": true, "hint": hint}))
 }
 
-/// 历史提交右键操作：检出（游离查看）/ 清空当前历史（保留文件）
+/// 把暂存区里的改动 amend 进 HEAD（保留原提交信息与作者）。
+/// “删除提交但保留改动”的收尾：被删提交的改动以暂存形态落到 HEAD 上，
+/// amend 即把它并入最新提交。
+async fn amend_into_head(repo: &str) -> Result<(), String> {
+    ensure_git_identity(repo).await;
+    let (rc, out) = runner::run_git(
+        &["commit".into(), "--amend".into(), "--no-edit".into()],
+        Some(repo),
+        None,
+    )
+    .await;
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(out.trim().to_string())
+    }
+}
+
+/// 删除提交的收尾：把被删提交的改动 cherry-pick（--no-commit）到当前 HEAD，
+/// 再 amend 进最新提交——改动并入最新提交而不是丢弃。
+/// Err 为面向用户的完整错误信息（cherry-pick 冲突 / amend 失败两种）。
+async fn fold_deleted_into_head(repo: &str, deleted: &str) -> Result<(), String> {
+    let (rc, _) = runner::run_git(
+        &["cherry-pick".into(), "--no-commit".into(), deleted.into()],
+        Some(repo),
+        None,
+    )
+    .await;
+    if rc != 0 {
+        // 冲突：sequencer 停在冲突态，由调用方 restore_after_failed_delete 统一还原
+        return Err("删除该提交会引发内容冲突，已自动恢复原状，什么都没有改".into());
+    }
+    amend_into_head(repo)
+        .await
+        .map_err(|e| format!("并入最新提交失败（{e}），已自动恢复原状"))
+}
+
+/// 删除提交失败后的整体还原：清掉 cherry-pick / rebase 残留 → 硬回保险 tag →
+/// 弹回储藏。保证“什么都没有改”。
+async fn restore_after_failed_delete(repo: &str, tag: &str, stashed: bool) {
+    let _ = runner::run_git(&["cherry-pick".into(), "--abort".into()], Some(repo), None).await;
+    let _ = runner::run_git(&["rebase".into(), "--abort".into()], Some(repo), None).await;
+    let _ = runner::run_git(
+        &["reset".into(), "--hard".into(), tag.to_string()],
+        Some(repo),
+        None,
+    )
+    .await;
+    pop_stash(repo, stashed).await;
+}
+
+/// 历史提交右键操作：检出（游离查看）/ 删除此提交（改动并入最新提交，不丢弃）
 /// 校验用户提供的 git 引用（commit / 分支 / tag）能否安全作为命令行参数使用。
 /// 拒绝：空串、以 '-' 开头（选项注入）、含空白或控制字符、超长（>255）。
 fn is_safe_ref(s: &str) -> bool {
@@ -1286,7 +1350,10 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
     }
 
     if op == "delete_one" {
-        // 只删除选中的这一个提交，其余重放（rebase --onto）；硬删除前打保险 tag
+        // 只删除选中的这一个提交，其余重放（rebase --onto / 根提交重铸）。
+        // 被删提交的**改动不丢弃**：收尾统一 amend 进新的最新提交——
+        // 删最新提交 = 并入补位成为最新的上一条；删中间/根 = 并入当前最新提交。
+        // 硬改写前打保险 tag；任一步冲突/失败都整体还原到 tag，什么都不改。
         if !is_safe_ref(&commit) {
             return ok(json!({"ok": false, "error": "非法的 commit 引用"}));
         }
@@ -1313,6 +1380,24 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
         if rc != 0 {
             return ok(json!({"ok": false, "error": "只能删除当前分支历史中的提交"}));
         }
+        // 合并提交没有"这一条的改动"可 amend（cherry-pick 合并提交必败），
+        // 点对点删除会把它整条掀掉，语义危险；明确拒绝，引导用反向提交/回退。
+        let (mrc, _) = runner::run_git(
+            &[
+                "rev-parse".into(),
+                "--verify".into(),
+                "--quiet".into(),
+                format!("{commit}^2"),
+            ],
+            Some(&repo),
+            None,
+        )
+        .await;
+        if mrc == 0 {
+            return ok(
+                json!({"ok": false, "error": "合并提交暂不支持点对点删除，请用「反向提交」或「回退到此提交」"}),
+            );
+        }
         let (_, head) =
             runner::run_git(&["rev-parse".into(), "HEAD".into()], Some(&repo), None).await;
         let is_head = commit == head.trim();
@@ -1338,24 +1423,47 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
             );
         }
 
-        if is_head {
-            // 删最新一条：退到上一位。保险 tag 由 hard_reset 内部统一打，避免同秒撞名
-            return match git_rollback::hard_reset(&repo, &parent, true).await {
-                Ok(r) => ok(
-                    json!({"ok": true, "hint": format!("已删除该提交，保险 tag {} 可在紧急恢复中找回", r["backup_tag"].as_str().unwrap_or(""))}),
-                ),
-                Err(e) => ok(json!({"ok": false, "error": e})),
-            };
-        }
-
-        // rebase 类路径：这里才打本路径自己的保险 tag
+        // 保险 tag：所有删除路径统一在这里打一次，作为失败整体还原的锚点
         let tag = format!("_backup_{}", paths::now_compact());
-        runner::run_git(
+        let (rc, out) = runner::run_git(
             &["tag".into(), tag.clone(), "HEAD".into()],
             Some(&repo),
             None,
         )
         .await;
+        if rc != 0 {
+            return ok(json!({"ok": false, "error": format!("打保险 tag 失败：{}", out.trim())}));
+        }
+        // 未提交改动先储藏：amend 会把暂存区内容一并并进提交，必须先腾空索引；
+        // 收尾（finish_delete）或失败回滚（pop_stash）时弹回。
+        let stashed = stash_if_dirty(&repo).await;
+
+        if is_head {
+            // 删最新一条：soft 退到上一条（被删提交的改动进暂存区），再 amend
+            // 进它——上一条补位成为最新提交，改动合并进去，不丢弃。
+            let (rc, out) = runner::run_git(
+                &["reset".into(), "--soft".into(), parent],
+                Some(&repo),
+                None,
+            )
+            .await;
+            if rc != 0 {
+                pop_stash(&repo, stashed).await;
+                return ok(json!({"ok": false, "error": format!("回退失败：{}", out.trim())}));
+            }
+            if let Err(e) = amend_into_head(&repo).await {
+                restore_after_failed_delete(&repo, &tag, stashed).await;
+                return ok(
+                    json!({"ok": false, "error": format!("并入最新提交失败（{e}），已自动恢复原状")}),
+                );
+            }
+            return finish_delete(
+                &repo,
+                stashed,
+                format!("已删除该提交，它的改动已并入上一条提交（现为最新）；保险 tag {tag} 可找回"),
+            )
+            .await;
+        }
 
         if is_root {
             // 删根提交：把第二条提交重铸为无父新根，其余提交重放到它上面
@@ -1371,6 +1479,7 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
             )
             .await;
             if rc != 0 || child.trim().is_empty() {
+                pop_stash(&repo, stashed).await;
                 return ok(json!({"ok": false, "error": "无法定位根提交的下一条"}));
             }
             let child = child.lines().next().unwrap_or("").trim().to_string();
@@ -1397,6 +1506,7 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
             )
             .await;
             if rc != 0 || rc2 != 0 {
+                pop_stash(&repo, stashed).await;
                 return ok(json!({"ok": false, "error": "读取下一条提交信息失败"}));
             }
             let (rc, new_root) = runner::run_git(
@@ -1411,11 +1521,11 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
             )
             .await;
             if rc != 0 {
+                pop_stash(&repo, stashed).await;
                 return ok(
                     json!({"ok": false, "error": if new_root.trim().is_empty() { "重铸新根失败" } else { new_root.trim() }}),
                 );
             }
-            let stashed = stash_if_dirty(&repo).await;
             let (rc, _out) = runner::run_git(
                 &[
                     "rebase".into(),
@@ -1435,18 +1545,28 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
                     json!({"ok": false, "error": "删除该提交会引发内容冲突，已自动恢复原状，什么都没有改"}),
                 );
             }
+            // 被删根提交的改动 cherry-pick 进最新提交并 amend，不丢弃
+            if let Err(msg) = fold_deleted_into_head(&repo, &commit).await {
+                restore_after_failed_delete(&repo, &tag, stashed).await;
+                return ok(json!({"ok": false, "error": msg}));
+            }
             return finish_delete(
                 &repo,
                 stashed,
-                format!("已删除根提交，下一条提交成为新根；保险 tag {tag} 可找回"),
+                format!("已删除根提交，下一条提交成为新根，它的改动已并入最新提交；保险 tag {tag} 可找回"),
             )
             .await;
         }
 
         // 中间的提交：rebase --onto 重放后续提交
-        let stashed = stash_if_dirty(&repo).await;
         let (rc, _out) = runner::run_git(
-            &["rebase".into(), "--onto".into(), parent, commit, branch],
+            &[
+                "rebase".into(),
+                "--onto".into(),
+                parent,
+                commit.clone(),
+                branch,
+            ],
             Some(&repo),
             Some(300.0),
         )
@@ -1458,10 +1578,15 @@ async fn git_commit_ops(Json(d): Json<Value>) -> Response {
                 json!({"ok": false, "error": "删除该提交会引发内容冲突，已自动恢复原状，什么都没有改"}),
             );
         }
+        // 被删提交的改动 cherry-pick 进最新提交并 amend，不丢弃
+        if let Err(msg) = fold_deleted_into_head(&repo, &commit).await {
+            restore_after_failed_delete(&repo, &tag, stashed).await;
+            return ok(json!({"ok": false, "error": msg}));
+        }
         return finish_delete(
             &repo,
             stashed,
-            format!("已删除该提交，其余提交已重放；保险 tag {tag} 可找回"),
+            format!("已删除该提交，其余提交已重放，它的改动已并入最新提交；保险 tag {tag} 可找回"),
         )
         .await;
     }
@@ -1600,52 +1725,108 @@ async fn git_commit_stats(Query(q): Query<Q>) -> Response {
     }
 }
 
-/// 提交历史 numstat 缓存：按 (repo, branch, n) 键 + 分支 tip 校验。
-/// 指定分支时校验该分支 tip（rev-parse 分支名），tip 未变则历史必然不变
+/// 提交历史 numstat 缓存：按 (repo, branch, n) 键 + 双重 tip 校验。
+/// ① 分支 tip（rev-parse 分支名/HEAD）：tip 未变则历史必然不变
 /// （工作区改动不影响已提交的 numstat），直接返回缓存；变了才重跑 git log。
+/// ② 基准分支 tip：push / fetch 只移动 origin/<base> 而不动 HEAD，
+/// 只校验 ① 会吐出过期列表（推送后会话内仍显旧数据、重启后才变空，
+/// 行为不一致），必须把基准的 sha 一并纳入校验。
 /// branch 为空 = 当前 HEAD。返回 (commits, base)，base = 支线独有过滤所用的基准。
-type LogTableCache = Mutex<HashMap<(String, String, i64), (String, (Vec<Value>, Option<String>))>>;
+type LogTableCache = Mutex<
+    HashMap<(String, String, i64), (String, String, (Vec<Value>, Option<String>))>,
+>;
 static LOG_TABLE_CACHE: OnceLock<LogTableCache> = OnceLock::new();
 
 async fn cached_log_table(repo: &str, n: i64, branch: &str) -> (Vec<Value>, Option<String>) {
     // 安全：branch 以 '-' 开头会被 git 当作选项解析，拒绝即可（正常分支名不会）
     let branch = if branch.starts_with('-') { "" } else { branch };
     let rev = if branch.is_empty() { "HEAD" } else { branch };
-    // tip 快查（rev-parse 是毫秒级，远便宜于 log --numstat）
-    let (hrc, hout) = runner::run_git(&["rev-parse".into(), rev.into()], Some(repo), None).await;
-    let tip = if hrc == 0 {
-        hout.trim().to_string()
-    } else {
-        String::new()
+    // 当前分支名：优先用参数，否则零进程读 .git/HEAD；读不到再问 git。
+    // base 探测要用它；探测结果同时传给 get_log_table，避免重复跑一遍。
+    let mut current = branch.to_string();
+    if current.is_empty() {
+        if let Some(name) = git_repo::current_branch_fast(repo) {
+            current = name;
+        } else {
+            let (rc, out) = runner::run_git(
+                &["rev-parse".into(), "--abbrev-ref".into(), "HEAD".into()],
+                Some(repo),
+                None,
+            )
+            .await;
+            if rc == 0 {
+                current = out.trim().to_string();
+            }
+        }
+    }
+    let base = git_repo::detect_base_branch(repo, &current).await;
+    // tip 快查（零进程读 refs 文件；读不到回落 rev-parse，毫秒级，
+    // 远便宜于 log --numstat）
+    let tip = match git_repo::rev_parse_fast(repo, rev) {
+        Some(h) => h,
+        None => {
+            let (hrc, hout) =
+                runner::run_git(&["rev-parse".into(), rev.into()], Some(repo), None).await;
+            if hrc == 0 {
+                hout.trim().to_string()
+            } else {
+                String::new()
+            }
+        }
+    };
+    // 基准 tip：push/fetch 移动 origin/<base> 时 HEAD 不变，仅凭分支 tip
+    // 会命中过期缓存，必须一并校验（空 base 记空串，稳定可比）。
+    let base_tip = match &base {
+        Some(b) => match git_repo::rev_parse_fast(repo, b) {
+            Some(h) => h,
+            None => {
+                let (brc, bout) = runner::run_git(
+                    &["rev-parse".into(), "--verify".into(), b.clone()],
+                    Some(repo),
+                    None,
+                )
+                .await;
+                if brc == 0 {
+                    bout.trim().to_string()
+                } else {
+                    String::new()
+                }
+            }
+        },
+        None => String::new(),
     };
     let key = (repo.to_string(), branch.to_string(), n);
     let cache = LOG_TABLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let guard = cache.lock().unwrap();
-        if let Some((h, data)) = guard.get(&key) {
-            if *h == tip {
+        if let Some((h, bh, data)) = guard.get(&key) {
+            if *h == tip && *bh == base_tip {
                 return data.clone();
             }
         }
     }
-    let data = git_repo::get_log_table(repo, n, branch).await;
+    let data = git_repo::get_log_table(repo, n, branch, base).await;
     let mut guard = cache.lock().unwrap();
     if guard.len() >= 32 {
         guard.clear();
     }
-    guard.insert(key, (tip, data.clone()));
+    guard.insert(key, (tip, base_tip, data.clone()));
     data
 }
 
 async fn git_log_table(Query(q): Query<Q>) -> Response {
-    let repo = q.path.unwrap_or_default();
-    let n =
-        q.n.unwrap_or_else(|| "50".into())
-            .parse::<i64>()
-            .unwrap_or(50);
-    let branch = q.branch.unwrap_or_default();
-    let (commits, base) = cached_log_table(&repo, n, &branch).await;
-    ok(json!({"ok": true, "commits": commits, "base": base}))
+    ok(build_log_table_payload(&q.path.unwrap_or_default(), q.n, q.branch).await)
+}
+
+/// log_table 的核心逻辑：供 HTTP handler 与启动预取 bundle 共用。
+async fn build_log_table_payload(repo: &str, n: Option<String>, branch: Option<String>) -> Value {
+    let n = n
+        .unwrap_or_else(|| "50".into())
+        .parse::<i64>()
+        .unwrap_or(50);
+    let branch = branch.unwrap_or_default();
+    let (commits, base) = cached_log_table(repo, n, &branch).await;
+    json!({"ok": true, "commits": commits, "base": base})
 }
 
 async fn git_branches(Query(q): Query<Q>) -> Response {
@@ -1845,28 +2026,43 @@ async fn repo_status(Query(q): Query<Q>) -> Response {
 
 /// 工作区硬核视图：porcelain=v2 全字段 + 逐文件 +/- + 文件系统探测
 async fn repo_status_hardcore(Query(q): Query<Q>) -> Response {
-    let path = q.path.unwrap_or_default();
-    // 四个互相独立的 git 子进程并行跑，延迟收敛到最慢的那个
-    let wt_args = vec!["diff".into(), "--numstat".into()];
-    let idx_args = vec!["diff".into(), "--cached".into(), "--numstat".into()];
-    let (st, wt, idx, remote) = tokio::join!(
-        git_status_v2::get_status_v2(&path),
-        runner::run_git(&wt_args, Some(&path), None),
-        runner::run_git(&idx_args, Some(&path), None),
-        git_repo::get_remote(&path),
+    ok(build_status_hardcore(&q.path.unwrap_or_default()).await)
+}
+
+/// status_hardcore 的核心逻辑：供 HTTP handler 与启动预取 bundle 共用。
+async fn build_status_hardcore(path: &str) -> Value {
+    // 三个互相独立的 git 子进程并行跑，延迟收敛到最慢的那个。
+    // numstat 从"工作区 + 暂存区 vs HEAD"一次取（界面显示的就是两者合计），
+    // 比原来 diff / diff --cached 两条命令少一个 git 进程（每次 spawn ~190ms）。
+    let diff_args = vec!["diff".into(), "--numstat".into(), "HEAD".into()];
+    let (st, wt, remote) = tokio::join!(
+        git_status_v2::get_status_v2(path),
+        runner::run_git(&diff_args, Some(path), None),
+        git_repo::get_remote(path),
     );
     let (meta, mut files) = match st {
         Ok(v) => v,
-        Err(e) => return ok(json!({"ok": false, "error": e})),
+        Err(e) => return json!({"ok": false, "error": e}),
     };
     let wt_map = git_repo::parse_numstat(if wt.0 == 0 { &wt.1 } else { "" });
-    let idx_map = git_repo::parse_numstat(if idx.0 == 0 { &idx.1 } else { "" });
+    // 空仓库（还没提交过，无 HEAD）时 diff HEAD 不可用：退回 worktree vs index
+    // （该形式无 HEAD 也能跑）；有 HEAD 的正常仓库不会走到这里，不多花进程。
+    let wt_map = if wt.0 != 0 {
+        let fb = runner::run_git(&["diff".into(), "--numstat".into()], Some(path), None).await;
+        if fb.0 == 0 {
+            git_repo::parse_numstat(&fb.1)
+        } else {
+            wt_map
+        }
+    } else {
+        wt_map
+    };
 
     // 文件系统探测（stat + 前 8KB 读）和未跟踪行数统计是同步 IO，
     // 包 spawn_blocking 避免占死 tokio worker
     let probe_limit = if files.len() > 500 { 200 } else { files.len() };
     let pb_files = std::mem::take(&mut files);
-    let pb_path = path.clone();
+    let pb_path = path.to_string();
     let pb = tokio::task::spawn_blocking(move || {
         let mut out_files = Vec::with_capacity(pb_files.len());
         for (i, mut f) in pb_files.into_iter().enumerate() {
@@ -1901,9 +2097,8 @@ async fn repo_status_hardcore(Query(q): Query<Q>) -> Response {
             } else {
                 let p = f["path"].as_str().unwrap_or("").to_string();
                 let (pw0, pw1) = wt_map.get(&p).copied().unwrap_or((0, 0));
-                let (pi0, pi1) = idx_map.get(&p).copied().unwrap_or((0, 0));
-                f["plus"] = json!(pw0 + pi0);
-                f["minus"] = json!(pw1 + pi1);
+                f["plus"] = json!(pw0);
+                f["minus"] = json!(pw1);
             }
             out_files.push(f);
         }
@@ -1943,15 +2138,15 @@ async fn repo_status_hardcore(Query(q): Query<Q>) -> Response {
         );
     }
 
-    ok(json!({
+    json!({
         "ok": true,
         "meta": meta,
         "summary": summary,
         "files": files,
         "remote": remote,
-        "in_progress": detect_in_progress(&path),
+        "in_progress": detect_in_progress(path),
         "probed": probe_limit.min(files.len()),
-    }))
+    })
 }
 
 async fn repo_sync_remote(Json(d): Json<Value>) -> Response {
@@ -1980,6 +2175,87 @@ async fn repo_overview(Query(q): Query<Q>) -> Response {
         }
         Err(e) => ok(json!({"ok": false, "error": e})),
     }
+}
+
+/// 概览面板独有数据（7 天活动 / 总提交数 / 最后提交时间）。
+/// 状态与改动统计由前端从 status_hardcore 派生——启动时与 status 并行预取，
+/// 不再等 overview 自己跑一遍 status + numstat（省两条 ~250ms spawn + 一串串行等待）。
+async fn repo_overview_extra(Query(q): Query<Q>) -> Response {
+    let path = q.path.unwrap_or_default();
+    let mut v = git_repo::get_overview_extra(&path).await;
+    v["ok"] = json!(true);
+    ok(v)
+}
+
+// ---------------- 启动预取 bundle ----------------
+
+/// 启动一键包：status_hardcore + log_table + overview_extra 三份数据一发拿全。
+/// 关键在**时序**：main.rs 在进程启动时（WebView2 冷启动 ~640ms 之前）就并发
+/// 预取，页面 DOMContentLoaded 时数据通常已到手——git 的 6 条 spawn 完全藏进
+/// 浏览器进程派生窗口的空档里，页面不再等 git。
+/// 一致性：本 bundle 只被启动流程消费一次；之后的任何刷新都走各自的活动端点
+/// （refreshAll 强制重查），不存在"读到旧缓存"的窗口。
+struct BundleCell {
+    repo: String,
+    cell: Arc<tokio::sync::OnceCell<Value>>,
+}
+static STARTUP_BUNDLE: OnceLock<Mutex<Option<BundleCell>>> = OnceLock::new();
+
+fn bundle_slot() -> &'static Mutex<Option<BundleCell>> {
+    STARTUP_BUNDLE.get_or_init(|| Mutex::new(None))
+}
+
+/// 进程启动时调用（main.rs setup）：为 active repo 后台预热 bundle。
+/// 不阻塞、不 panic——预取失败时页面端现场构建，行为与旧版一致。
+pub fn prefetch_startup_bundle(repo: String) {
+    let cell = Arc::new(tokio::sync::OnceCell::new());
+    {
+        let mut g = bundle_slot().lock().unwrap();
+        *g = Some(BundleCell {
+            repo: repo.clone(),
+            cell: cell.clone(),
+        });
+    }
+    tokio::spawn(async move {
+        let _ = cell
+            .get_or_init(|| async { build_startup_bundle(&repo).await })
+            .await;
+    });
+}
+
+/// bundle 内容：三份数据并行构建；任一部分失败也只拖累自己，
+/// 用 ok:false / 空数据占位，不连带其他部分。
+async fn build_startup_bundle(repo: &str) -> Value {
+    let (status, log, extra) = tokio::join!(
+        build_status_hardcore(repo),
+        build_log_table_payload(repo, None, None),
+        git_repo::get_overview_extra(repo),
+    );
+    json!({"ok": true, "status": status, "log": log, "extra": extra})
+}
+
+async fn repo_startup_bundle(Query(q): Query<Q>) -> Response {
+    let repo = q.path.unwrap_or_default();
+    let cell = {
+        let mut g = bundle_slot().lock().unwrap();
+        match g.as_ref() {
+            // 预热过且同一个仓库：直接等它的 OnceCell（并发调用合并为一次构建）
+            Some(b) if b.repo == repo => b.cell.clone(),
+            // 没预热（headless / 仓库不符）或已被别的仓库顶掉：现场构建并登记
+            _ => {
+                let cell = Arc::new(tokio::sync::OnceCell::new());
+                *g = Some(BundleCell {
+                    repo: repo.clone(),
+                    cell: cell.clone(),
+                });
+                cell
+            }
+        }
+    };
+    let v = cell
+        .get_or_init(|| async { build_startup_bundle(&repo).await })
+        .await;
+    ok(v.clone())
 }
 
 async fn repo_list() -> Response {
@@ -2605,6 +2881,8 @@ pub fn build_router() -> Router {
         .route("/api/repo/status_hardcore", get(repo_status_hardcore))
         .route("/api/repo/sync_remote", post(repo_sync_remote))
         .route("/api/repo/overview", get(repo_overview))
+        .route("/api/repo/overview_extra", get(repo_overview_extra))
+        .route("/api/repo/startup_bundle", get(repo_startup_bundle))
         .route("/api/repo/list", get(repo_list))
         .route("/api/repo/open", post(repo_open))
         .route("/api/repo/add", post(repo_add))

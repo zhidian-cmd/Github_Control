@@ -7,6 +7,7 @@ use crate::messages;
 use crate::net;
 use crate::paths;
 use std::process::Stdio;
+use std::sync::OnceLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::Duration;
@@ -25,6 +26,10 @@ pub async fn run(
             .and_then(|v| v.as_f64())
             .unwrap_or(300.0)
     });
+    // 命令耗时埋点：写进 run.log 的 DUR 字段，诊断"卡"时无歧义区分
+    // "命令本身慢"与"用户空闲"（日志时间戳是命令完成后才写的，相邻条目
+    // 间隔里混有用户思考时间，历史上多次因此误判）。
+    let t_cmd = std::time::Instant::now();
     let env_map;
     let envs = match env_override {
         Some(m) => m,
@@ -61,7 +66,7 @@ pub async fn run(
         Ok(c) => c,
         Err(e) => {
             let (rc, out) = (-1, e.to_string());
-            log_command(cmd, rc, &out);
+            log_command(cmd, rc, &out, t_cmd.elapsed().as_millis());
             return (rc, out);
         }
     };
@@ -104,7 +109,7 @@ pub async fn run(
     if rc != 0 {
         out = messages::translate(&out);
     }
-    log_command(cmd, rc, &out);
+    log_command(cmd, rc, &out, t_cmd.elapsed().as_millis());
     (rc, out)
 }
 
@@ -183,6 +188,19 @@ pub async fn run_fb(cmd: &[String], timeout: Option<f64>, input: Option<String>)
         // 没配代理：纯直连，无处可兜
         return (rc, out);
     }
+    // 转直连前先花至多 1.2s 体检 TCP：直连根本不通就别白跑一次完整命令
+    // （典型环境：代理软件没开 + 直连被墙 —— 跑直连也必败，只会让用户多等）。
+    // 体检测的是 api.github.com:443，与本应用全部 GitHub 链路一致。
+    // 同步 TCP 探测必须走 spawn_blocking，否则阻塞 axum 所在的事件循环。
+    let direct_reachable = tokio::task::spawn_blocking(|| net::direct_github_reachable(1.2))
+        .await
+        .unwrap_or(false);
+    if !direct_reachable {
+        return (
+            rc,
+            format!("{out}\n\n（已检测到本机直连也不通，未再盲目重试；需要代理请先开启代理软件）"),
+        );
+    }
     let env_map = env::build_env_direct();
     let (rc2, out2) = run(cmd, timeout, input, Some(&env_map)).await;
     if rc2 == 0 {
@@ -213,20 +231,26 @@ pub async fn run_git_fb(
 
 /// 日志脱敏：屏蔽可能经由命令输出/参数写入 run.log 的明文凭据。
 /// 覆盖 GitHub 令牌（ghp_/gho_/ghu_/ghs_/ghr_/github_pat_）与 URL 内 Basic Auth。
+/// 正则编译一次复用（log_command 每次命令调 3 次 redact，重复编译纯浪费）。
 fn redact(s: &str) -> String {
+    static RE: OnceLock<(regex::Regex, regex::Regex)> = OnceLock::new();
+    let (re_token, re_basic) = RE.get_or_init(|| {
+        (
+            regex::Regex::new(r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})")
+                .expect("token 脱敏正则必须编译通过"),
+            regex::Regex::new(r"(?i)(https?://)[^/\s:@]+:[^/\s:@]+@")
+                .expect("basic auth 脱敏正则必须编译通过"),
+        )
+    });
     let mut out = s.to_string();
-    if let Ok(re) = regex::Regex::new(r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})")
-    {
-        out = re.replace_all(&out, "***REDACTED***").into_owned();
-    }
-    if let Ok(re) = regex::Regex::new(r"(?i)(https?://)[^/\s:@]+:[^/\s:@]+@") {
-        out = re.replace_all(&out, "$1***:***@").into_owned();
-    }
+    out = re_token.replace_all(&out, "***REDACTED***").into_owned();
+    out = re_basic.replace_all(&out, "$1***:***@").into_owned();
     out
 }
 
-/// 写操作日志 run.log，超过 1MB 轮转为 run.old.log
-fn log_command(cmd: &[String], returncode: i32, output: &str) {
+/// 写操作日志 run.log，超过 1MB 轮转为 run.old.log。
+/// dur_ms 为命令自身耗时（spawn 到输出读完），与条目时间戳相互独立。
+fn log_command(cmd: &[String], returncode: i32, output: &str, dur_ms: u128) {
     let log_dir = paths::logs_dir();
     let log_file = log_dir.join("run.log");
     // 超过 1MB 轮转
@@ -237,10 +261,11 @@ fn log_command(cmd: &[String], returncode: i32, output: &str) {
     }
     let head: String = redact(&output.chars().take(2000).collect::<String>());
     let line = format!(
-        "[{}]\nCMD: {}\nRC:  {}\nOUT: {}\n{}\n",
+        "[{}]\nCMD: {}\nRC:  {}\nDUR: {}ms\nOUT: {}\n{}\n",
         paths::now_iso(),
         redact(&cmd.join(" ")),
         returncode,
+        dur_ms,
         head,
         "-".repeat(60)
     );

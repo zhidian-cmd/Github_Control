@@ -857,11 +857,18 @@ function createNewBranchFlow(sel) {
       html: "是否立即切换过去？",
       confirmText: "切换",
     });
-    if (!sw) { renderSidebar(); return; }  // 刷新下拉列表
+    if (!sw) {
+      _branchCache = { repo: "", list: null };  // 新分支要出现在下拉里
+      renderSidebar();
+      loadBranchesInto($("#branch-select"));
+      return;
+    }
     const d2 = await api("/api/git/branch", { method: "POST", body: { repo: repo(), action: "switch", name } });
     if (!d2.ok) throw new Error(d2.error || "切换失败");
     STATE.selCommit = null;  // 分支变了，旧选中提交不再有效
+    _branchCache = { repo: "", list: null };
     await refreshAll();
+    loadBranchesInto($("#branch-select"));
     toast(`已切换到 ${name}`, "success");
   });
 }
@@ -889,7 +896,7 @@ function renderCommitList() {
     }
   };
 
-  // 右键菜单：反向提交 / 建分支 / 清空历史 / 软回退 / 混合回退（+ 检出查看）
+  // 右键菜单：反向提交 / 建分支 / 删除此提交 / 软回退 / 混合回退（+ 检出查看）
   box.oncontextmenu = (e) => {
     const row = e.target.closest("[data-hash]");
     if (!row) return;
@@ -898,7 +905,7 @@ function renderCommitList() {
     showMenu([
       { label: "反向提交（生成撤销提交）", sub: "已推送也安全", onclick: () => runRollbackOp(hash, "revert") },
       { label: "在此提交上创建分支…", onclick: () => branchAtCommit(hash) },
-      { label: "删除此提交", danger: true, sub: "只删这一条，其余原样保留 · 自动打保险 tag", onclick: () => deleteCommitOne(hash) },
+      { label: "删除此提交", danger: true, sub: "只删这一条，改动并入最新提交 · 自动打保险 tag", onclick: () => deleteCommitOne(hash) },
       { divider: true },
       { label: "软回退到此提交", sub: "改动保留，重新提交", onclick: () => runRollbackOp(hash, "soft") },
       { label: "混合回退到此提交", sub: "改动保留在工作区", onclick: () => runRollbackOp(hash, "mixed") },
@@ -921,7 +928,7 @@ async function runRollbackOp(hash, mode) {
 async function deleteCommitOne(hash) {
   const ok = await confirmDialog({
     title: "删除这条提交？",
-    html: `只删除 <code>${esc(hash.slice(0, 7))}</code> 这一条，<b>其余提交原样保留</b>（时间重排，内容不变）。<br>删除前自动打保险 tag，可在「设置 → 紧急恢复」找回。<br>若删除会引发内容冲突，将自动恢复原状。`,
+    html: `只删除 <code>${esc(hash.slice(0, 7))}</code> 这一条，<b>其余提交原样保留</b>（时间重排）。<br><b>它的改动不会丢弃</b>，会并入删除后的最新提交：删的是最新提交时，并入补位成为最新的上一条；删的是中间/靠前的提交时，并入当前最新提交。<br>删除前自动打保险 tag，可在「设置 → 紧急恢复」找回。<br>若删除会引发内容冲突，将自动恢复原状。<br><span style="color:var(--text-2)">已推送的提交被删除后会改写历史，下次推送将强推覆盖远程。</span>`,
     confirmText: "删除",
     danger: true,
   });
@@ -990,6 +997,36 @@ async function stashPopNow() {
   } catch (e) { toast(e.message, "error"); }
 }
 
+/* 分支下拉数据：懒加载 + 按仓库缓存。
+ * 启动时 renderAll 会跑两次（log_table 异步回归后 commits 0→N 触发二次
+ * 渲染侧栏），旧代码每次 bindChangesOps 都无条件拉 branches——启动白挨
+ * 两发 branch -vv（冷 spawn 各 ~290ms），窗口聚焦刷新也会重复拉。
+ * 现在只在用户真正交互（聚焦/点击下拉框）时才拉，同仓库拉一次即缓存；
+ * 分支增删切后缓存作废重拉。 */
+let _branchCache = { repo: "", list: null };
+
+function fillBranchSelect(sel, list) {
+  const s = STATE.status;
+  let opts = list.map((b) =>
+    `<option value="${esc(b.name)}" ${b.current ? "selected" : ""}>${esc(b.name)}${b.upstream ? " ↑↓" : ""}</option>`).join("");
+  // 游离 HEAD（查看历史版本）时，当前分支不存在于列表，插入提示项
+  if (s?.branch && !list.some((b) => b.name === s.branch)) {
+    opts = `<option value="${esc(s.branch)}" selected>⊕ ${esc(s.branch)}（正在查看历史版本）</option>` + opts;
+  }
+  sel.innerHTML = `<option value="__new__">＋ 新建分支…</option>` + (opts || `<option value="${esc(s?.branch || "")}">${esc(s?.branch || "")}</option>`);
+  if (s?.branch) sel.value = s.branch;  // 保持当前分支选中
+}
+
+/// 拉分支列表并填充进 sel；元素已被重渲染（detached）时静默丢弃
+function loadBranchesInto(sel) {
+  api(`/api/git/branches?path=${encodeURIComponent(repo())}`)
+    .then((d) => {
+      _branchCache = { repo: repo(), list: d.branches };
+      if (document.body.contains(sel)) fillBranchSelect(sel, d.branches);
+    })
+    .catch(() => {});
+}
+
 function bindChangesOps() {
   const s = STATE.status;
   // 进行中操作横幅（中止/继续）
@@ -1024,40 +1061,48 @@ function bindChangesOps() {
       });
     });
   });
-  // 分支下拉
+  // 分支下拉：缓存命中即填充；否则先放当前分支占位，等用户真正交互
+  // （聚焦/点击）再拉全量——onchange 立即可用，不依赖填充时序
   const sel = $("#branch-select");
-  api(`/api/git/branches?path=${encodeURIComponent(repo())}`)
-    .then((d) => {
-      let opts = d.branches.map((b) =>
-        `<option value="${esc(b.name)}" ${b.current ? "selected" : ""}>${esc(b.name)}${b.upstream ? " ↑↓" : ""}</option>`).join("");
-      // 游离 HEAD（查看历史版本）时，当前分支不存在于列表，插入提示项
-      if (s?.branch && !d.branches.some((b) => b.name === s.branch)) {
-        opts = `<option value="${esc(s.branch)}" selected>⊕ ${esc(s.branch)}（正在查看历史版本）</option>` + opts;
+  if (_branchCache.repo === repo() && _branchCache.list) {
+    fillBranchSelect(sel, _branchCache.list);
+  } else {
+    sel.innerHTML = `<option value="${esc(s?.branch || "")}">${esc(s?.branch || "")}</option>`;
+    const load = () => {
+      sel.removeEventListener("focus", load);
+      sel.removeEventListener("mousedown", load);
+      if (_branchCache.repo === repo() && _branchCache.list) {
+        fillBranchSelect(sel, _branchCache.list);
+        return;
       }
-      sel.innerHTML = `<option value="__new__">＋ 新建分支…</option>` + (opts || `<option value="${esc(s?.branch || "")}">${esc(s?.branch || "")}</option>`);
-      if (s?.branch) sel.value = s.branch;  // 保持当前分支选中
-      sel.onchange = async () => {
-        if (sel.value === "__new__") { createNewBranchFlow(sel); return; }
-        const name = sel.value;
-        const ok = await confirmDialog({
-          title: `切换到 ${name}？`,
-          html: "如有未提交改动，会自动储藏后切换（稍后可点 [恢复储藏] 找回）。",
-          confirmText: "切换",
-        });
-        if (!ok) { sel.value = s?.branch || ""; return; }
-        const d2 = await api("/api/git/branch", { method: "POST", body: { repo: repo(), action: "switch", name } }).catch((e) => ({ ok: false, error: e.message }));
-        if (!d2.ok) { toast(d2.error, "error"); sel.value = s?.branch || ""; return; }
-        STATE.selCommit = null;  // 分支变了，旧选中提交不再有效
-        await refreshAll();
-        if (d2.hint) {
-          // 切分支自动储藏了未提交改动：给一键找回入口（储藏不是提交，改动没丢）
-          toast(`已切换到 ${name}，未提交改动已自动储藏`, "success",
-            { label: "恢复改动", onclick: stashPopNow });
-        } else {
-          toast(`已切换到 ${name}`, "success");
-        }
-      };
-    }).catch(() => { sel.innerHTML = `<option>${esc(s?.branch || "")}</option>`; });
+      loadBranchesInto(sel);
+    };
+    sel.addEventListener("focus", load);
+    sel.addEventListener("mousedown", load);
+  }
+  sel.onchange = async () => {
+    if (sel.value === "__new__") { createNewBranchFlow(sel); return; }
+    const name = sel.value;
+    const ok = await confirmDialog({
+      title: `切换到 ${name}？`,
+      html: "如有未提交改动，会自动储藏后切换（稍后可点 [恢复储藏] 找回）。",
+      confirmText: "切换",
+    });
+    if (!ok) { sel.value = s?.branch || ""; return; }
+    const d2 = await api("/api/git/branch", { method: "POST", body: { repo: repo(), action: "switch", name } }).catch((e) => ({ ok: false, error: e.message }));
+    if (!d2.ok) { toast(d2.error, "error"); sel.value = s?.branch || ""; return; }
+    STATE.selCommit = null;  // 分支变了，旧选中提交不再有效
+    _branchCache = { repo: "", list: null };  // 列表已过期（current 标记、新分支），刷新后重拉
+    await refreshAll();
+    loadBranchesInto($("#branch-select"));  // 用户正盯着下拉框：立即补新列表
+    if (d2.hint) {
+      // 切分支自动储藏了未提交改动：给一键找回入口（储藏不是提交，改动没丢）
+      toast(`已切换到 ${name}，未提交改动已自动储藏`, "success",
+        { label: "恢复改动", onclick: stashPopNow });
+    } else {
+      toast(`已切换到 ${name}`, "success");
+    }
+  };
 
   // 删除分支：删的是下拉框里选中的那个（克隆整仓库后清理不要的分支用）
   $("#branch-del").onclick = async () => {
@@ -1085,7 +1130,9 @@ function bindChangesOps() {
     if (!d.ok) { toast(d.error, "error"); return; }
     toast(`已删除分支 ${name}`, "success");
     _sidebarSig = "";  // 侧边栏签名不含分支列表，强制重建下拉框
+    _branchCache = { repo: "", list: null };  // 删掉的分支不能留在缓存里
     await refreshAll();
+    loadBranchesInto($("#branch-select"));
   };
 
   $("#file-filter").oninput = (e) => {
@@ -1175,13 +1222,44 @@ const XY_TEXT = { M: "已修改", A: "新文件", D: "已删除", R: "重命名"
 
 /* ----- 视图 A：仓库概览 ----- */
 
+/* 概览面板的独有数据（7 天活动 / 总提交数 / 最后提交时间）：
+ * 按仓库缓存 + 在飞去重。启动时与 status_hardcore 并行预热，
+ * renderMain 走到概览视图时多半已到手，不再干等。 */
+let _ovExtra = { repo: "", data: null };
+let _ovExtraP = null;
+let _ovExtraGen = 0;    // 缓存代际：invalidate 时 +1
+let _ovExtraPGen = -1;  // 在途请求的代际（与当前代际不符即作废重发）
+
+function fetchOvExtra() {
+  if (_ovExtra.repo === repo() && _ovExtra.data) return Promise.resolve(_ovExtra.data);
+  // 在途请求已被 invalidate 作废（代际不符）时重发，避免渲染旧数据
+  if (!_ovExtraP || _ovExtraPGen !== _ovExtraGen) {
+    const myGen = _ovExtraGen;
+    _ovExtraPGen = myGen;
+    _ovExtraP = api(`/api/repo/overview_extra?path=${encodeURIComponent(repo())}`)
+      .then((x) => {
+        if (myGen === _ovExtraGen) _ovExtra = { repo: repo(), data: x };
+        return x;
+      })
+      .catch(() => null)
+      .finally(() => { _ovExtraP = null; });
+  }
+  return _ovExtraP;
+}
+
+function invalidateOvExtra() {
+  _ovExtra = { repo: "", data: null };
+  _ovExtraGen++;  // 作废在途响应：旧结果不再进缓存
+}
+
 function viewOverview(main) {
   if (!repo()) { showView("#welcome"); return; }
   main.innerHTML = `<div class="view">
     <h1 class="view-title">仓库概览</h1>
     <div id="ov-body"><div class="card"><div class="empty">加载中…</div></div></div>
   </div>`;
-  api(`/api/repo/overview?path=${encodeURIComponent(repo())}`).then((o) => {
+  const renderOv = (o) => {
+    if (!$("#ov-body")) return;  // 视图已切走
     // 最近 7 天柱状图（纯 CSS）
     const days = [];
     for (let i = 6; i >= 0; i--) {
@@ -1223,11 +1301,43 @@ function viewOverview(main) {
       <div class="card setting-block" style="margin-top:12px">
         <h3>最近 7 天活动</h3>
         <div class="bar-chart">${chart}</div>
-        <div class="help" style="margin-top:8px">总提交 ${o.total_commits} · 最后提交 ${o.last_commit_time ? relTime(o.last_commit_time) : "无"}</div>
+        <div class="help" style="margin-top:8px">总提交 ${o.total_commits ?? "—"} · 最后提交 ${o.last_commit_time ? relTime(o.last_commit_time) : "无"}</div>
       </div>`;
-  }).catch((e) => {
-    $("#ov-body").innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
-  });
+  };
+  if (!STATE.hc) {
+    // 状态没到手（加载失败等）：退回完整 overview 端点（自带 status + numstat）
+    api(`/api/repo/overview?path=${encodeURIComponent(repo())}`).then(renderOv)
+      .catch((e) => { $("#ov-body").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; });
+    return;
+  }
+  // 状态类字段从 status_hardcore 现算（与 overview 端点同一数据源：
+  // diff --numstat HEAD），省掉 overview 自己那两条 git spawn
+  const files = STATE.status?.files || [];
+  const cs = { M: 0, A: 0, D: 0, R: 0 };
+  for (const f of files) {
+    const xy = f.xy || "";
+    if (xy === "??") { cs.A++; continue; }
+    if (xy.includes("M")) cs.M++;
+    if (xy.includes("A")) cs.A++;
+    if (xy.includes("D")) cs.D++;
+    if (xy.includes("R")) cs.R++;
+  }
+  const base = {
+    path: repo(),
+    remote: STATE.status?.remote || "",
+    branch: STATE.status?.branch || "",
+    ahead: STATE.status?.ahead || 0,
+    behind: STATE.status?.behind || 0,
+    workspace_files: STATE.hc?.summary?.total || 0,
+    changed_summary: cs,
+    diff_total: { plus: STATE.hc?.summary?.plus || 0, minus: STATE.hc?.summary?.minus || 0 },
+  };
+  fetchOvExtra().then((x) => renderOv({
+    ...base,
+    activity: x?.activity || [],
+    total_commits: x ? x.total_commits : null,
+    last_commit_time: x?.last_commit_time || "",
+  }));
 }
 
 /* ----- 视图 B：文件改动详情 ----- */
@@ -2009,8 +2119,8 @@ function renderAccountBlock() {
   api("/api/auth/token").then((d) => {
     box.innerHTML = d.token
       ? `<span class="badge badge-g">已保存 Token：${esc(d.token)}</span>
-         <span class="help">仅本机使用；写操作（推送/发布）需要时自动带上，公开仓库无需 Token</span>`
-      : `<span class="help">尚未保存 Token。推送 / 发布等写操作需要时会提示输入；公开仓库的克隆、下载、查看无需 Token。</span>`;
+         <span class="help" style="margin:0">仅本机使用；写操作（推送/发布）需要时自动带上，公开仓库无需 Token</span>`
+      : `<span class="help" style="margin:0">尚未保存 Token。推送 / 发布等写操作需要时会提示输入；公开仓库的克隆、下载、查看无需 Token。</span>`;
   }).catch(() => { box.innerHTML = `<span class="help">无法读取 Token 状态</span>`; });
 }
 
@@ -2080,6 +2190,7 @@ function applyHardcore(hc) {
 async function refreshAll() {
   if (!repo()) { renderAll(); return; }
   const gen = ++refreshGen;
+  invalidateOvExtra();  // 活动图/提交数可能已变（提交、切分支等）；概览视图渲染时按需重拉
   // status / log 并行请求，各自到达即渲染（历史/文件不用互相等 → 消除延迟感）
   const applyStatus = api(`/api/repo/status_hardcore?path=${encodeURIComponent(repo())}`)
     .then((st) => {
@@ -2179,21 +2290,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     STATE.uiExpanded = cfg.config?.ui?.expanded_dirs || {};
     STATE.lastCloneDir = cfg.config?.ui?.last_clone_dir || "";
     if (STATE.active) {
-      // 启动只等状态接口（首屏所需的全部数据）；
-      // 提交历史放后台加载，就绪后自动补渲染，首屏更快可交互
+      // 启动一键包：status + 提交历史 + 概览独有数据一发拿全。
+      // Rust 端在进程启动那一刻就已并发预取（6 条 git 命令整体藏进
+      // WebView2 冷启动的空档），这里到达时数据多半已到手，不再等 git
       try {
-        const st = await api(`/api/repo/status_hardcore?path=${encodeURIComponent(STATE.active)}`);
-        applyHardcore(st);
-        syncRemoteFromStatus({ remote: st.remote || "" });
-        api(`/api/git/log_table?path=${encodeURIComponent(STATE.active)}&n=50`)
-          .then((lc) => {
-            STATE.commits = lc.commits.map((c) => ({ ...c }));
-            STATE.logBase = lc.base || "";
-            renderAll();
-          })
-          .catch(() => {});
-      } catch {
-        toast("上次打开的仓库已不存在", "error");
+        const b = await api(`/api/repo/startup_bundle?path=${encodeURIComponent(STATE.active)}`);
+        if (!b.status || b.status.ok === false) {
+          throw new Error(b.status?.error || "仓库状态读取失败");
+        }
+        applyHardcore(b.status);
+        syncRemoteFromStatus({ remote: b.status.remote || "" });
+        STATE.commits = (b.log?.commits || []).map((c) => ({ ...c }));
+        STATE.logBase = b.log?.base || "";
+        if (b.extra) _ovExtra = { repo: repo(), data: b.extra };  // 直接喂概览缓存
+      } catch (e) {
+        toast(e.message || "上次打开的仓库已不存在", "error");
         STATE.active = "";
       }
     }
