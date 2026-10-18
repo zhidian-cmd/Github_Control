@@ -73,9 +73,8 @@ pub async fn release_create(
         Some(r) => r,
         None => return json!({"ok": false, "error": "该仓库没有设置远程地址，请先推送一次"}),
     };
-    if let Some(err) = net::proxy_preflight() {
-        return json!({"ok": false, "error": err});
-    }
+    // 代理挂了但直连可用时，run_gh 的兜底会自动转直连，不设硬闸门
+    // （2026-10-18：proxy_preflight 硬闸门会把能兜底成功的发布直接判死）
 
     let mut tmp_files: Vec<String> = Vec::new();
     let mut args = vec![

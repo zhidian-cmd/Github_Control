@@ -49,29 +49,15 @@ pub fn direct_github_reachable(timeout: f64) -> bool {
     false
 }
 
-/// 联网操作前检查代理。返回错误消息，None 表示可用。
-/// 语义与 env::build_env 一致：配置了 url 即视为启用（旧的 enabled 开关已废弃）。
-pub fn proxy_preflight() -> Option<String> {
-    let cfg = crate::config::load_config(false);
-    let url = normalize_proxy_url(
-        cfg.pointer("/proxy/url")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
-    if url.is_empty() {
-        return None; // 没配代理 = 纯直连，无需预检
-    }
-    let timeout = cfg
-        .pointer("/proxy/test_timeout")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(2.0);
-    if !is_proxy_reachable(&url, timeout) {
-        return Some(format!(
-            "代理 {url} 无法连接，请检查代理软件是否运行，或在设置里关闭代理。"
-        ));
-    }
-    None
-}
+/// 联网关键词判定见下方 NET_HINTS / is_net_hint。
+///
+/// 2026-10-18 移除 proxy_preflight（曾是 api/gh_runner 5 处接口的硬闸门）：
+/// 代理端口不通就整体判死，但直连可用时 runner::run_fb 明明能兜底转直连，
+/// 闸门把"本可以成功的操作"直接堵死（用户实测：代理软件没开，推送/更新全废）。
+/// 链路决策统一收敛到 run_fb：代理失败命中 NET_HINTS → 自动转直连重试；
+/// 直连也不通时 run_fb 自带"（已检测到本机直连也不通，未再盲目重试…）"报错，
+/// 比闸门的 fail-fast 更准。测试按钮走 is_proxy_reachable /
+/// direct_github_reachable，不受影响。
 
 /// 网络抖动/间歇性故障关键词：命中才重试（git pull/push 重试与 gh 直连重试共用）
 pub const NET_HINTS: [&str; 38] = [

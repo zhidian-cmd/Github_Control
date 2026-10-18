@@ -906,9 +906,10 @@ async fn git_pull(Json(d): Json<Value>) -> Response {
         .unwrap_or("")
         .trim()
         .to_string();
-    if let Some(err) = net::proxy_preflight() {
-        return ok(json!({"ok": false, "error": err}));
-    }
+    // 不再做 proxy_preflight 硬闸门：代理挂了但直连可用时，闸门会把
+    // "能兜底成功的操作"直接判死（2026-10-18 用户实测教训）。链路决策
+    // 统一交给 runner::run_fb——代理失败命中 NET_HINTS 自动转直连，
+    // 直连也不通时它自带明确报错，比闸门 fail-fast 更准。
     // 显式指定 origin <branch>：分支还没关联上游时，裸 `git pull` 会直接报
     // "no tracking information"，而推送又要求先更新 —— 形成死循环。
     let branch = git_repo::get_current_branch(&repo).await;
@@ -1100,9 +1101,7 @@ async fn git_push(Json(d): Json<Value>) -> Response {
                 json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}),
             );
         }
-        if let Some(err) = net::proxy_preflight() {
-            return ok(json!({"ok": false, "error": err}));
-        }
+        // 代理链路决策交给 run_fb 兜底，不设硬闸门（见 git_pull 注释）
         let st = credential::get_auth_state(false).await;
         if st == "expired" || st == "not_logged_in" {
             return ok(json!({"ok": false, "error": "创建远程仓库需要先登录 GitHub"}));
@@ -1179,9 +1178,7 @@ async fn git_push(Json(d): Json<Value>) -> Response {
         return ok(json!({"ok": true, "hint": format!("已创建远程仓库 {name}（{vis_cn}）并推送")}));
     }
 
-    if let Some(err) = net::proxy_preflight() {
-        return ok(json!({"ok": false, "error": err}));
-    }
+    // 代理挂了但直连可用时，兜底会自动转直连，不设硬闸门（见 git_pull 注释）
     let upstream = git_repo::has_upstream(&repo, &branch).await;
     let (rc, out) = push_with_lease(&repo, &branch, !upstream).await;
     ok(json!({"ok": rc == 0, "error": if rc == 0 { Value::Null } else { json!(auth_hint(&out)) }}))
@@ -2382,9 +2379,7 @@ async fn repo_init_and_publish(Json(d): Json<Value>) -> Response {
                 json!({"ok": false, "error": "仓库名只能用英文、数字、-、_、.（GitHub 不接受中文名）"}),
             );
         }
-        if let Some(err) = net::proxy_preflight() {
-            return ok(json!({"ok": false, "error": err}));
-        }
+        // 代理挂了但直连可用时，兜底会自动转直连，不设硬闸门（见 git_pull 注释）
     }
     // 1. git init
     let (rc, out) = runner::run_git(

@@ -209,7 +209,9 @@ pub async fn run_fb(cmd: &[String], timeout: Option<f64>, input: Option<String>)
             format!("[自动兜底] 代理网络失败，已自动改走直连重试成功。\n\n{out2}"),
         )
     } else {
-        (rc, format!("{out}\n\n（已自动尝试直连，同样失败）"))
+        // 双败时把直连方的报错也带上：只看代理方的错误无法判断直连为何失败
+        // （DNS / TLS / 重置各不相同），排查时全靠它。
+        (rc, format!("{out}\n\n（已自动尝试直连，同样失败）\n{out2}"))
     }
 }
 
@@ -295,5 +297,81 @@ pub fn log_error(prefix: &str, body: &str) {
     {
         use std::io::Write;
         let _ = f.write_all(line.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    /// 端到端实测代理兜底（复现用户真实场景，默认 ignore，按需手动跑）：
+    ///   cargo test fallback_e2e -- --ignored --nocapture
+    /// 自包含造"必死代理"：先占随机端口再放开（不依赖外部 7810 的状态——
+    /// 用户机上 7810 可能被 gitport-github 占用，硬编码会让测试时灵时不灵），
+    /// 临时把工程根 config.json 的代理指向它，跑完原样恢复。
+    /// 验证链条：主路径走代理（必败，输出命中 NET_HINTS）→ 直连体检通过 →
+    /// 自动转直连重试成功，且输出带 [自动兜底] 标记。
+    /// 开发机没有 runtime/，用 PATH 上的系统 git（公开仓库，无需鉴权）。
+    /// 注意 1：本测试在 WorkBuddy 沙箱里要经"孙进程"才不被劫持代理 env，
+    /// cargo test 起的测试进程正好满足，故此处可用 git 验证。
+    /// 注意 2：沙箱网络层会对"同进程内先代理失败再直连"的序列发 RST
+    /// （直连重试 20s 后 Recv failure: Connection was reset；同样的直连
+    /// 在全新进程里 1.5s 即成功）——这是沙箱特有的连接状态跟踪，
+    /// 用户真机没有这层。故本测试在沙箱内预期失败于最后一步，
+    /// 在正常环境才期望全绿；逻辑各环节已由单测 + 分步诊断覆盖。
+    #[tokio::test]
+    #[ignore = "依赖真实网络（直连 GitHub），按需手动跑"]
+    async fn fallback_e2e_dead_proxy_switches_to_direct() {
+        // 自包含必死端口：bind 端口 0 拿随机端口，listener drop 后必然无人听
+        let dead_port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+
+        // 备份并临时改写工程根 config.json 的代理地址（恢复放在断言前，
+        // 断言失败也不会留下被改脏的配置）
+        let cfg_path = paths::config_file().clone();
+        let original = std::fs::read_to_string(&cfg_path).ok();
+        let mut cfg: Value = original
+            .as_deref()
+            .and_then(|t| serde_json::from_str(t).ok())
+            .unwrap_or_else(config::defaults);
+        if !cfg["proxy"].is_object() {
+            cfg["proxy"] = json!({});
+        }
+        cfg["proxy"]["url"] = json!(format!("http://127.0.0.1:{dead_port}"));
+        config::save_config(&cfg); // 同时更新进程内缓存，run_fb 读的就是它
+
+        let (rc, out) = run_fb(
+            &[
+                "git".into(),
+                "ls-remote".into(),
+                "https://github.com/octocat/Hello-World.git".into(),
+                "HEAD".into(),
+            ],
+            Some(60.0),
+            None,
+        )
+        .await;
+
+        // 恢复配置：文件写回原文（原本没有则删掉），缓存强制重读
+        match &original {
+            Some(text) => {
+                let _ = std::fs::write(&cfg_path, text);
+            }
+            None => {
+                let _ = std::fs::remove_file(&cfg_path);
+            }
+        }
+        let _ = config::load_config(true);
+
+        assert_eq!(rc, 0, "兜底后仍然失败，输出：{out}");
+        assert!(
+            out.contains("[自动兜底]"),
+            "一次成功但没走兜底链路？输出：{out}"
+        );
+        assert!(out.contains("HEAD"), "ls-remote 输出不含 HEAD：{out}");
+        println!("死代理端口 {dead_port} 下的兜底结果：\n{out}");
     }
 }
