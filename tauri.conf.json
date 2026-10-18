@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Github Control",
+  "productName": "Github_Control",
   "version": "0.1.0",
-  "identifier": "com.zhidian.github-control",
+  "identifier": "com.zhidian.github_control",
   "build": {
     "frontendDist": "web"
   },

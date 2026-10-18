@@ -1,4 +1,4 @@
-# Github Control（Rust/Tauri 移植版）
+# Github_Control（Rust/Tauri 移植版）
 
 本地 Git 与 GitHub 的桌面控制台 —— 原 Python（Flask + pywebview）版本的完整 Rust 移植。
 
@@ -71,12 +71,12 @@ Github_Control\            # 本移植版工程
 ## 构建与运行
 
 ```bash
-cargo build --release        # 产物：target\release\github-control.exe
+cargo build --release        # 产物：target\release\Github_Control.exe
 # 或直接
 cargo run
 ```
 
-绿色便携：把 `target\release\github-control.exe` 拷到工程根（或任意目录，与
+绿色便携：把 `target\release\Github_Control.exe` 拷到工程根（或任意目录，与
 `runtime/`、`web/` 同级）双击即可运行；exe 位于 `target\release|debug` 下时
 程序会自动把根目录上溯到工程根。
 

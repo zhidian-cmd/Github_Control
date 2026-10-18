@@ -1,7 +1,7 @@
 [package]
-name = "github-control"
+name = "Github_Control"
 version = "0.1.0"
-description = "Github Control - 本地 Git 与 GitHub 桌面控制台（Rust/Tauri 移植版）"
+description = "Github_Control - 本地 Git 与 GitHub 桌面控制台（Rust/Tauri 移植版）"
 edition = "2021"
 rust-version = "1.77"
 

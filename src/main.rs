@@ -1,4 +1,4 @@
-//! Github Control —— Rust/Tauri 移植版入口。
+//! Github_Control —— Rust/Tauri 移植版入口。
 //! 与 Python 版 main.pyw 对应：单实例、runtime 检查、本地 HTTP 服务、窗口创建。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -175,7 +175,7 @@ fn main() {
                     "main",
                     WebviewUrl::CustomProtocol(gc_url),
                 )
-                .title("Github Control")
+                .title("Github_Control")
                 .min_inner_size(980.0, 620.0)
                 // 窗口立即显示（保证"点了就有"的即时反馈），底色取应用主题的
                 // 暖白 #f4f2ea，内容就绪前的瞬间是主题色而非白屏

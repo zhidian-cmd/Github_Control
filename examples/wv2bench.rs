@@ -102,7 +102,7 @@ fn main() {
 
     println!("\n=== C. 真实配置目录副本（60MB profile）对 env 创建的影响 ===");
     let real = std::env::var("LOCALAPPDATA").unwrap_or_default()
-        + "\\com.zhidian.github-control\\EBWebView";
+        + "\\com.zhidian.github_control\\EBWebView";
     if std::path::Path::new(&real).exists() {
         let copy = std::env::temp_dir().join("wv2bench-real");
         let _ = std::fs::remove_dir_all(&copy);

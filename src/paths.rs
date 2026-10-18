@@ -17,7 +17,7 @@ pub fn base_dir() -> &'static PathBuf {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."));
-        // 开发布局：<root>\target\release\github-control.exe → 上溯到 <root>
+        // 开发布局：<root>\target\release\Github_Control.exe → 上溯到 <root>
         // （runtime/、web/、config.json 都在工程根）；发布时 exe 单独拷到
         // 任意目录与 runtime/、web/ 同级即可，保持 Python 版"绿色便携"语义。
         let stem = exe_dir

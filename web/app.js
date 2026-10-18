@@ -1,4 +1,4 @@
-/* Github Control v2.1 — SPA 前端
+/* Github_Control v2.1 — SPA 前端
    布局：顶栏（仓库切换/更新/推送/发布/登录/设置）+ 侧边栏（改动/历史+提交框）+ 主内容区
    约定：所有请求走 api()；未登录时联网按钮灰掉；危险操作必须走 confirmDialog */
 
