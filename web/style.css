@@ -31,8 +31,8 @@
   --shadow-lg: 0 8px 32px rgba(70, 60, 35, 0.22);
   --font: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
   --mono: Consolas, "Cascadia Mono", "Courier New", monospace;
-  --topbar-h: 56px;
-  --sidebar-w: 280px;
+  --topbar-h: 48px;
+  --sidebar-w: 264px;
 }
 
 /* 纸张颗粒：极淡噪点覆盖全窗，pointer-events 不挡交互 */
@@ -105,8 +105,8 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: none;
@@ -123,7 +123,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
   align-items: center;
   gap: 8px;
   max-width: 280px;
-  padding: 6px 12px;
+  padding: 4px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -144,7 +144,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
-  padding: 6px;
+  padding: 4px;
   display: none;
 }
 .dropdown.open { display: block; }
@@ -152,7 +152,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
 .menu-item {
   display: block;
   width: 100%;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 0;
   border-radius: var(--radius);
   background: none;
@@ -165,7 +165,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
 .menu-item:hover { background: var(--gray-bg); }
 .menu-item .sub { display: block; font-size: 11px; color: var(--text-2); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item.active { color: var(--green); }
-.menu-divider { height: 1px; margin: 6px 4px; background: var(--border-soft); }
+.menu-divider { height: 1px; margin: 4px; background: var(--border-soft); }
 .menu-item.danger { color: var(--red); }
 
 /* 认证状态徽章（真实状态，非装饰） */
@@ -173,7 +173,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 12px;
+  padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 500;
@@ -199,7 +199,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 14px;
+  padding: 5px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -223,19 +223,19 @@ code, .mono { font-family: var(--mono); font-size: 13px; }
 .btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn-danger:hover { background: #a40e26; border-color: #a40e26; }
 
-.btn-sm { padding: 3px 10px; font-size: 12px; }
+.btn-sm { padding: 2px 8px; font-size: 12px; }
 
 .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ---------- 表单 ---------- */
 
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
 .field label { font-size: 13px; font-weight: 600; }
 .field .help { font-size: 12px; color: var(--text-2); }
 
 .input, textarea.input, select.input {
   width: 100%;
-  padding: 7px 12px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -257,15 +257,21 @@ textarea.input { resize: vertical; min-height: 70px; }
 
 .badge {
   display: inline-block;
-  padding: 1px 8px;
+  padding: 0 8px;
   border-radius: 999px;
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
-  line-height: 18px;
+  line-height: 16px;
   flex-shrink: 0;
 }
 .badge-g { color: var(--green); background: var(--green-bg); }
+.badge-b { color: var(--blue); background: var(--blue-bg); }
+
+/* 领先/落后计数（概览页） */
+.diff-count { font-family: var(--mono); font-weight: 600; }
+.diff-count.ahead { color: var(--green); }
+.diff-count.behind { color: var(--yellow); }
 
 /* ---------- 侧边栏 ---------- */
 
@@ -276,7 +282,7 @@ textarea.input { resize: vertical; min-height: 70px; }
 }
 .tabs button {
   flex: 1;
-  padding: 10px 0;
+  padding: 8px 0;
   border: 0;
   background: none;
   font-family: var(--font);
@@ -308,7 +314,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
+  padding: 5px 10px;
   cursor: pointer;
   border-left: 2px solid transparent;
 }
@@ -328,12 +334,12 @@ textarea.input { resize: vertical; min-height: 70px; }
 /* 侧边栏底部提交框 */
 .commit-box {
   flex-shrink: 0;
-  padding: 12px;
+  padding: 10px;
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
-.commit-box .input { margin-bottom: 8px; }
-.commit-box textarea.input { min-height: 54px; }
+.commit-box .input { margin-bottom: 6px; }
+.commit-box textarea.input { min-height: 46px; }
 .commit-box .commit-btn { width: 100%; }
 .commit-box .hint { font-size: 12px; color: var(--text-2); text-align: center; }
 
@@ -347,16 +353,16 @@ textarea.input { resize: vertical; min-height: 70px; }
   justify-content: center;
   color: var(--text-2);
   gap: 6px;
-  padding: 40px;
+  padding: 24px;
   text-align: center;
 }
 .main-hint h3 { margin: 0; color: var(--text); font-size: 15px; }
 .main-hint p { margin: 0; font-size: 13px; }
 
-.view { padding: 20px 24px 48px; max-width: 920px; }
+.view { padding: 14px 20px 32px; max-width: 920px; }
 .view-wide { max-width: none; }
 
-.view-title { font-size: 18px; font-weight: 600; margin: 0 0 16px; }
+.view-title { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
 
 .card {
   background: var(--surface);
@@ -365,12 +371,12 @@ textarea.input { resize: vertical; min-height: 70px; }
   box-shadow: var(--shadow);
 }
 
-.card + .card { margin-top: 12px; }
+.card + .card { margin-top: 10px; }
 
-.setting-block { padding: 18px 20px; }
+.setting-block { padding: 14px 16px; }
 .setting-block + .setting-block { border-top: 1px solid var(--border-soft); }
-.setting-block h3 { margin: 0 0 12px; font-size: 14px; }
-.setting-block .help { font-size: 12px; color: var(--text-2); margin: -6px 0 12px; }
+.setting-block h3 { margin: 0 0 8px; font-size: 14px; }
+.setting-block .help { font-size: 12px; color: var(--text-2); margin: -4px 0 8px; }
 
 /* ---------- diff 视图 ---------- */
 
@@ -378,7 +384,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border-soft);
 }
 .diff-header .path { flex: 1; font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -386,9 +392,9 @@ textarea.input { resize: vertical; min-height: 70px; }
 .diff-view {
   font-family: var(--mono);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.5;
   overflow-x: auto;
-  padding: 8px 0;
+  padding: 6px 0;
   background: var(--surface);
   border-radius: 0 0 var(--radius) var(--radius);
 }
@@ -404,12 +410,12 @@ textarea.input { resize: vertical; min-height: 70px; }
 .split-list { width: 280px; flex-shrink: 0; overflow-y: auto; max-height: calc(100vh - 320px); }
 .split-main { flex: 1; min-width: 0; }
 
-.detail-head { padding: 16px 20px; border-bottom: 1px solid var(--border-soft); }
-.detail-head h2 { margin: 0 0 6px; font-size: 16px; }
-.detail-head .meta { color: var(--text-2); font-size: 13px; }
-.detail-head .body { margin-top: 8px; white-space: pre-wrap; font-size: 13px; }
+.detail-head { padding: 10px 14px; border-bottom: 1px solid var(--border-soft); }
+.detail-head h2 { margin: 0 0 4px; font-size: 15px; }
+.detail-head .meta { color: var(--text-2); font-size: 12px; }
+.detail-head .body { margin-top: 6px; white-space: pre-wrap; font-size: 13px; }
 
-.file-stat { padding: 6px 16px; font-family: var(--mono); font-size: 12px; }
+.file-stat { padding: 4px 12px; font-family: var(--mono); font-size: 12px; }
 .file-stat + .file-stat { border-top: 1px solid var(--border-soft); }
 .file-stat .st-A, .file-stat .st-M { color: var(--green); }
 .file-stat .st-D { color: var(--red); }
@@ -420,7 +426,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 20px;
+  padding: 6px 14px;
   background: var(--yellow-bg);
   border-bottom: 1px solid rgba(212, 167, 44, 0.4);
   color: var(--yellow);
@@ -431,13 +437,13 @@ textarea.input { resize: vertical; min-height: 70px; }
 
 /* ---------- 空态 / 错误 / 进度 ---------- */
 
-.empty { padding: 36px 20px; text-align: center; color: var(--text-2); }
-.empty h3 { margin: 0 0 6px; color: var(--text); font-size: 14px; }
-.empty p { margin: 0 0 14px; font-size: 13px; }
+.empty { padding: 24px 16px; text-align: center; color: var(--text-2); }
+.empty h3 { margin: 0 0 4px; color: var(--text); font-size: 14px; }
+.empty p { margin: 0 0 10px; font-size: 13px; }
 
 .error-box {
-  margin: 12px 0;
-  padding: 10px 14px;
+  margin: 8px 0;
+  padding: 8px 12px;
   border: 1px solid #f0c1c1;
   border-radius: var(--radius);
   background: var(--red-bg);
@@ -453,7 +459,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   background: #161b22;
   color: #c9d1d9;
   border-radius: var(--radius);
-  padding: 12px 14px;
+  padding: 10px 12px;
   max-height: 180px;
   overflow-y: auto;
   white-space: pre-wrap;
@@ -469,7 +475,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   display: none;
   align-items: flex-start;
   justify-content: center;
-  padding: 8vh 16px 16px;
+  padding: 6vh 16px 16px;
   background: rgba(31, 35, 40, 0.45);
 }
 .overlay.open { display: flex; }
@@ -477,7 +483,7 @@ textarea.input { resize: vertical; min-height: 70px; }
 .dialog {
   width: 100%;
   max-width: 560px;
-  max-height: 82vh;
+  max-height: 84vh;
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -485,17 +491,17 @@ textarea.input { resize: vertical; min-height: 70px; }
   box-shadow: var(--shadow-lg);
 }
 .dialog header {
-  padding: 14px 20px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border-soft);
   font-size: 15px;
   font-weight: 600;
 }
-.dialog .body { padding: 18px 20px; }
+.dialog .body { padding: 12px 16px; }
 .dialog footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 14px 20px;
+  padding: 10px 16px;
   border-top: 1px solid var(--border-soft);
   background: var(--bg);
   border-radius: 0 0 10px 10px;
@@ -504,11 +510,11 @@ textarea.input { resize: vertical; min-height: 70px; }
 .radio-card {
   display: flex;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   cursor: pointer;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .radio-card:hover { background: var(--bg); }
 .radio-card.checked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -519,22 +525,22 @@ textarea.input { resize: vertical; min-height: 70px; }
 .radio-card .d { font-size: 12px; color: var(--text-2); margin-top: 2px; display: block; }
 .radio-card .cmd { font-family: var(--mono); font-size: 11px; color: var(--text-2); margin-top: 4px; display: block; }
 
-.wizard-step { font-size: 12px; font-weight: 700; color: var(--accent); margin: 18px 0 10px; }
+.wizard-step { font-size: 12px; font-weight: 700; color: var(--accent); margin: 12px 0 8px; }
 .wizard-step:first-child { margin-top: 0; }
 
 /* ---------- Toast ---------- */
 
 #toasts {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: 12px;
+  bottom: 12px;
   z-index: 100;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .toast {
-  padding: 10px 16px;
+  padding: 8px 14px;
   border-radius: var(--radius);
   background: var(--text);
   color: #fff;
@@ -558,23 +564,23 @@ textarea.input { resize: vertical; min-height: 70px; }
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 40px;
+  padding: 32px;
 }
-.welcome h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.02em; }
-.welcome p { color: var(--text-2); margin: 0 0 28px; }
+.welcome h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.02em; }
+.welcome p { color: var(--text-2); margin: 0 0 20px; }
 .welcome .btn-row { justify-content: center; }
 
 /* ---------- Release 视图 ---------- */
 
-.release-row { padding: 14px 18px; }
+.release-row { padding: 10px 14px; }
 .release-row .head { display: flex; align-items: center; gap: 10px; }
 .release-row .tag { font-family: var(--mono); font-weight: 700; color: var(--accent); }
 .release-row .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.release-row .meta { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+.release-row .meta { font-size: 12px; color: var(--text-2); margin-top: 2px; }
 
 /* ---------- 筛选框 ---------- */
 
-.filter-input { padding: 5px 10px; font-size: 13px; }
+.filter-input { padding: 4px 8px; font-size: 13px; }
 
 /* 滚动条 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -584,23 +590,24 @@ textarea.input { resize: vertical; min-height: 70px; }
 
 /* ---------- v3 信息面板 ---------- */
 
-.ov-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ov-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 .kv { width: 100%; border-collapse: collapse; font-size: 13px; }
-.kv td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.kv td { padding: 4px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
 .kv tr:last-child td { border-bottom: 0; }
-.kv td:first-child { color: var(--text-2); width: 80px; white-space: nowrap; }
+.kv td:first-child { color: var(--text-2); width: 64px; white-space: nowrap; }
+.kv td.mono { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .ns-plus { color: var(--green); font-family: var(--mono); font-weight: 600; }
 .ns-minus { color: var(--red); font-family: var(--mono); font-weight: 600; }
 
-.bar-chart { display: flex; align-items: flex-end; gap: 14px; height: 92px; padding: 6px 4px 0; }
+.bar-chart { display: flex; align-items: flex-end; gap: 14px; height: 76px; padding: 4px 4px 0; }
 .bar-col { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 1; }
 .bar-col .bar { width: 28px; background: var(--accent); opacity: 0.75; border-radius: 3px 3px 0 0; min-height: 2px; }
 .bar-col span { font-size: 11px; color: var(--text-2); }
 
 .tree-dir {
-  padding: 6px 10px;
+  padding: 4px 10px;
   cursor: pointer;
   font-weight: 600;
   font-size: 13px;
@@ -610,20 +617,24 @@ textarea.input { resize: vertical; min-height: 70px; }
 .tree-dir .caret { display: inline-block; width: 14px; color: var(--text-2); font-size: 10px; }
 .tree-dir .cnt { color: var(--text-2); font-weight: 400; font-size: 12px; }
 
-.ht-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ht-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
 .ht-table th {
   text-align: left;
-  padding: 9px 14px;
+  padding: 4px 10px;
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
   font-weight: 600;
   font-size: 12px;
   white-space: nowrap;
 }
-.ht-table td { padding: 8px 14px; border-bottom: 1px solid var(--border-soft); }
+.ht-table td { padding: 3px 10px; line-height: 1.4; border-bottom: 1px solid var(--border-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ht-table tbody tr { cursor: pointer; }
 .ht-table tbody tr:hover { background: var(--bg); }
 .ht-table .msg { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 固定列宽：hash/作者/时间 收窄，消息列吃满剩余空间（改动列已删——空列白占宽度） */
+.ht-table th:nth-child(1), .ht-table td:nth-child(1) { width: 70px; }
+.ht-table th:nth-child(3), .ht-table td:nth-child(3) { width: 100px; }
+.ht-table th:nth-child(4), .ht-table td:nth-child(4) { width: 78px; }
 
 /* ---------- 骨架屏（数据 <200ms 到位就不闪，流畅 #3） ---------- */
 
@@ -668,9 +679,9 @@ textarea.input { resize: vertical; min-height: 70px; }
 .side-head .input {
   padding: 3px 8px;
   font-size: 13px;
-  height: 28px;
+  height: 26px;
 }
-.side-head select.input { height: 28px; padding: 2px 6px; }
+.side-head select.input { height: 26px; padding: 2px 6px; }
 .toast { display: flex; align-items: center; }
 .toast .btn { flex-shrink: 0; border-color: rgba(255, 255, 255, 0.6); background: transparent; color: #fff; }
 .toast .btn:hover { background: rgba(255, 255, 255, 0.15); }
@@ -682,20 +693,20 @@ textarea.input { resize: vertical; min-height: 70px; }
 /* ---------- 仓库下拉：紧凑条目 + 最多 4 条，超出滚动 ---------- */
 #menu.compact .menu-item { padding: 4px 10px; }
 #menu.compact .menu-item .sub { font-size: 10px; margin-top: 1px; }
-.menu-scroll { max-height: 208px; overflow-y: auto; }
+.menu-scroll { max-height: 176px; overflow-y: auto; }
 
 /* ---------- 提交详情三列布局（历史侧栏 | 文件列表 | diff 预览） ---------- */
 .cd-view {
   height: 100%;
   max-width: none;
-  padding: 12px 16px 16px;
+  padding: 8px 12px 12px;
   display: flex;
   flex-direction: column;
 }
 .cd-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.cd-wrap .detail-head { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 12px; }
+.cd-wrap .detail-head { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 10px; }
 .cd-wrap .detail-head h2 { font-size: 15px; }
-.cd-3col { flex: 1; min-height: 0; display: flex; gap: 12px; }
+.cd-3col { flex: 1; min-height: 0; display: flex; gap: 10px; }
 
 .cd-files {
   width: 180px;
@@ -709,7 +720,7 @@ textarea.input { resize: vertical; min-height: 70px; }
 }
 .cd-files-head {
   flex-shrink: 0;
-  padding: 7px 12px;
+  padding: 5px 10px;
   font-size: 12px;
   color: var(--text-2);
   border-bottom: 1px solid var(--border-soft);
@@ -723,7 +734,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 5px 10px;
+  padding: 4px 10px;
   font-family: var(--mono);
   font-size: 12px;
   cursor: pointer;
@@ -758,7 +769,7 @@ textarea.input { resize: vertical; min-height: 70px; }
 }
 .cd-preview-body { flex: 1; min-height: 0; overflow: auto; }
 .cd-drow {
-  padding: 4px 10px;
+  padding: 3px 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
@@ -792,7 +803,7 @@ textarea.input { resize: vertical; min-height: 70px; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px 3px;
+  padding: 4px 10px 2px;
   font-size: 11px;
   font-weight: 700;
   color: var(--text-2);

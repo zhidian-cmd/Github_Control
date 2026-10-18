@@ -143,7 +143,11 @@ function relTime(v) {
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
   if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
   const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  // 年内只显 月-日（列表密度）；跨年才带年份，完整日期在 title 里
+  const thisYear = new Date().getFullYear() === d.getFullYear();
+  return thisYear
+    ? `${p(d.getMonth() + 1)}-${p(d.getDate())}`
+    : `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /* 硬核视图：XY 双色块（左=HEAD→索引，右=索引→工作区） */
@@ -311,8 +315,7 @@ function tempLogin(desc) {
   return new Promise((resolve) => {
     $("#generic-title").textContent = "需要 GitHub Token";
     $("#generic-body").innerHTML = `
-      <p class="help" style="margin-top:0">${esc(desc)}是写操作，需要 GitHub 认证。请输入 Personal Access Token——
-      仅保存在本机凭据管理器，之后推送/发布自动使用；公开仓库的克隆与下载无需 Token。</p>
+      <p class="help" style="margin-top:0">${esc(desc)} 需要 GitHub 认证。Token 仅保存在本机，之后自动使用。</p>
       <div class="field"><label>Personal Access Token</label>
         <input class="input" type="password" id="temp-token" placeholder="ghp_…" autocomplete="off">
         <span class="help">
@@ -722,8 +725,9 @@ function fileRowHtml(f, depth) {
   const fs = f.fs || {};
   const pm = (f.plus || f.minus)
     ? `<span class="pm"><span class="ns-plus">+${f.plus || 0}</span> <span class="ns-minus">-${f.minus || 0}</span></span>` : "";
+  // 未跟踪文件：XY 徽章（?? 灰块）已表意，右侧不再放"新文件"文字
   const ops = f.x === "?"
-    ? `<span class="help" style="font-size:11px">${fs.suspicious_secret ? "⚠机密?" : "新文件"}</span>`
+    ? ""
     : `<button class="btn btn-sm" data-undo="${esc(f.path)}" data-deleted="${deleted ? 1 : ""}">${deleted ? "恢复" : "撤销"}</button>`;
   const pad = `padding-left:${10 + depth * 16}px`;
   const selected = STATE.selFile === f.path ? "selected" : "";
@@ -1290,11 +1294,17 @@ function viewOverview(main) {
         <div class="card setting-block">
           <h3>改动统计</h3>
           <table class="kv">
-            <tr><td>已修改</td><td>${o.changed_summary.M} 个文件</td></tr>
-            <tr><td>新文件</td><td>${o.changed_summary.A} 个文件</td></tr>
-            <tr><td>已删除</td><td>${o.changed_summary.D} 个文件</td></tr>
-            <tr><td>重命名</td><td>${o.changed_summary.R} 个文件</td></tr>
-            <tr><td>合计</td><td><span class="ns-plus">+${o.diff_total.plus}</span> <span class="ns-minus">-${o.diff_total.minus}</span></td></tr>
+            <tr><td>文件</td><td>${(() => {
+              const cs2 = o.changed_summary;
+              const parts = [
+                cs2.M ? `${cs2.M} 修改` : "",
+                cs2.A ? `${cs2.A} 新增` : "",
+                cs2.D ? `${cs2.D} 删除` : "",
+                cs2.R ? `${cs2.R} 重命名` : "",
+              ].filter(Boolean);
+              return parts.length ? parts.join(" · ") : "无改动";
+            })()}</td></tr>
+            <tr><td>增删</td><td><span class="ns-plus">+${o.diff_total.plus}</span> <span class="ns-minus">-${o.diff_total.minus}</span></td></tr>
           </table>
         </div>
       </div>
@@ -1360,19 +1370,16 @@ function viewFileDetail(main) {
         <div class="setting-block">
           <table class="kv">
             <tr><td>状态</td><td>${XY_TEXT[s.xy] || esc(s.xy)}</td></tr>
-            <tr><td>改动</td><td><span class="ns-plus">+${s.plus}</span> <span class="ns-minus">-${s.minus}</span></td></tr>
-            <tr><td>大小</td><td>${fmtSize(s.size)}</td></tr>
-            <tr><td>最后修改</td><td>${relTime(s.mtime)}</td></tr>
+            <tr><td>改动</td><td><span class="ns-plus">+${s.plus}</span> <span class="ns-minus">-${s.minus}</span> · ${fmtSize(s.size)} · ${relTime(s.mtime)}</td></tr>
           </table>
         </div>
-        <div style="padding:0 20px 20px">
+        <div style="padding:0 16px 16px">
           <details id="diff-fold">
             <summary>完整改动</summary>
-            <div style="margin:8px 0">
+            <div style="margin:6px 0">
               <button class="btn btn-sm" id="wd-toggle">逐词对比：关</button>
-              <span class="help" style="font-size:11px">只高亮改动的那几个词，而不是整行</span>
             </div>
-            <div class="diff-view" style="margin-top:10px"><div class="empty">加载中…</div></div>
+            <div class="diff-view" style="margin-top:8px"><div class="empty">加载中…</div></div>
           </details>
         </div>`;
 
@@ -1464,7 +1471,7 @@ function viewCommitDetail(main) {
           <div style="display:flex;align-items:flex-start;gap:12px">
             <div style="flex:1;min-width:0">
               <h2>${esc(c.msg)}</h2>
-              <div class="meta"><span class="mono">${esc(c.hash)}</span> · ${esc(c.author)} · ${esc(c.date)}（${relTime(c.date)}）</div>
+              <div class="meta"><span class="mono" title="${esc(c.hash)}">${esc(c.hash.slice(0, 7))}</span> · ${esc(c.author)} · ${relTime(c.date)}</div>
             </div>
             <button class="btn" id="btn-rollback">回退到此提交</button>
           </div>
@@ -1476,7 +1483,7 @@ function viewCommitDetail(main) {
             </div>
             <div class="cd-file-list" id="cd-file-list"></div>
           </div>
-          <div class="cd-preview" id="cd-preview"><div class="empty"><h3>点击左侧文件查看改动</h3><p>或点「全部改动」看整个提交的 patch</p></div></div>
+          <div class="cd-preview" id="cd-preview"><div class="empty"><h3>选择文件查看改动</h3></div></div>
         </div>`;
       $("#btn-rollback").onclick = () => openRollback(STATE.commits.findIndex((x) => x.hash === c.hash));
 
@@ -1545,33 +1552,27 @@ function viewCommitDetail(main) {
 /* ----- 视图 D：历史表格 ----- */
 
 function viewHistoryTable(main) {
-  const cur = STATE.status?.branch || "";
   const base = STATE.logBase;
-  const scope = base
-    ? `仅显示支线 ${esc(cur)} 相对 ${esc(base)} 的独有提交（其余为各支线共享的历史，不重复列出）`
-    : "当前分支的全部历史（未找到 main/master 基准分支）";
   main.innerHTML = `<div class="view view-wide"><h1 class="view-title">提交历史</h1>
-    <div class="help" style="margin-bottom:10px">${scope}；切支线请用 [文件改动] 页顶部的分支下拉</div>
     <div class="card" id="ht-body"></div></div>`;
   const rows = STATE.commits;
   if (!rows.length) {
     const emptyMsg = base
-      ? `分支 ${esc(cur)} 相对 ${esc(base)} 还没有独有提交（可能与基准同步，或尚未开始改动）`
+      ? `相对 ${esc(base)} 暂无独有提交`
       : "提交后会显示在这里";
     $("#ht-body").innerHTML = `<div class="empty"><h3>没有可显示的提交</h3><p>${emptyMsg}</p></div>`;
     return;
   }
   $("#ht-body").innerHTML = `
     <table class="ht-table">
-      <thead><tr><th>Hash</th><th>消息</th><th>作者</th><th>时间</th><th>改动</th></tr></thead>
+      <thead><tr><th>Hash</th><th>消息</th><th>作者</th><th>时间</th></tr></thead>
       <tbody>
         ${rows.map((c) => `
           <tr data-hash="${esc(c.hash)}">
             <td class="commit-hash">${esc(c.short)}</td>
             <td class="msg" title="${esc(c.msg)}">${esc(c.msg)}</td>
             <td>${esc(c.author)}</td>
-            <td>${relTime(c.date)}</td>
-            <td><span class="ns-plus">+${c.plus}</span> <span class="ns-minus">-${c.minus}</span></td>
+            <td title="${esc(c.date)}">${relTime(c.date)}</td>
           </tr>`).join("")}
       </tbody>
     </table>`;
@@ -1679,7 +1680,7 @@ function viewRelease(main) {
         </div>
       </div>
       <div id="release-list"><div class="empty"><h3>未加载</h3>
-        <p>每次进入此页不会自动请求远程。点 [刷新] 按需拉取最新 Release 列表。</p></div></div>
+        <p>点 [刷新] 拉取远程 Release 列表</p></div></div>
     </div>`;
   $("#rel-refresh").onclick = () => loadReleases();
 
@@ -1848,15 +1849,14 @@ function openCloneDialog() {
   $("#generic-body").innerHTML = `
     <div class="field"><label>仓库地址（粘贴 URL 即可）</label>
       <input class="input" id="clone-url" placeholder="https://github.com/user/repo.git">
-      <span class="help">公开仓库自动走 gh-proxy 镜像加速，无需登录和代理；私有仓库自动使用已保存的 Token 直连</span></div>
+      <span class="help">公开仓库自动走镜像加速；私有仓库用已保存的 Token 直连</span></div>
     <div class="field"><label>保存位置</label>
       <div class="form-row">
         <input class="input" id="clone-path" placeholder="选择或输入本地目录" value="${esc(STATE.lastCloneDir || "")}">
         <button class="btn" id="clone-browse">浏览</button>
       </div></div>
-    <label class="check"><input type="checkbox" id="clone-history" checked> 所有历史版本（不勾 = 每个分支只下最新版本，省流量）</label>
-    <label class="check"><input type="checkbox" id="clone-branches" checked> 所有分支（不勾 = 只下载默认分支）</label>
-    ${STATE.lastCloneDir ? `<div class="help" style="font-size:11px;margin-top:4px">上次用的位置已填好，想换就重新选或改</div>` : ""}`;
+    <label class="check"><input type="checkbox" id="clone-history" checked> 所有历史版本（不勾只下最新版本，省流量）</label>
+    <label class="check"><input type="checkbox" id="clone-branches" checked> 所有分支（不勾只下默认分支）</label>`;
   $("#generic-ok").textContent = "开始克隆";
   openDialog("#generic-overlay");
   $("#clone-browse").onclick = () => pickFolder($("#clone-path"));
@@ -1988,7 +1988,7 @@ function viewSettings(main) {
         </div>
         <div class="setting-block">
           <h3>代理与兜底</h3>
-          <p class="help">填了代理地址 = 联网优先走代理，网络失败自动转直连（兜底内置恒开）；留空 = 纯直连。改完保存后下次调用即生效</p>
+          <p class="help">留空 = 纯直连；填了 = 优先走代理，失败自动转直连</p>
           <div class="field"><label>代理地址（留空 = 纯直连）</label><input class="input" id="proxy-url" placeholder="http://127.0.0.1:31181"></div>
           <div class="btn-row">
             <button class="btn btn-primary" id="save-proxy">保存</button>
@@ -1998,7 +1998,6 @@ function viewSettings(main) {
         </div>
         <div class="setting-block">
           <h3>编辑器</h3>
-          <p class="help">默认代码编辑器的路径（可选）</p>
           <div class="form-row" style="max-width:480px">
             <input class="input" id="editor-path" placeholder="如 C:\\Program Files\\VS Code\\Code.exe">
           </div>
@@ -2006,7 +2005,7 @@ function viewSettings(main) {
         </div>
         <div class="setting-block">
           <h3>超时</h3>
-          <p class="help">git / gh 命令超时时间（秒），防止界面假死</p>
+          <p class="help">git / gh 命令超时（秒）</p>
           <div class="form-row" style="max-width:240px">
             <input class="input" type="number" id="git-timeout" min="30" max="3600">
             <button class="btn" id="save-timeout">保存</button>
@@ -2014,14 +2013,14 @@ function viewSettings(main) {
         </div>
         <div class="setting-block">
           <h3>紧急恢复</h3>
-          <p class="help">硬回退前会自动打保险 tag；这里可列出所有可恢复点并一键恢复（针对当前仓库）</p>
+          <p class="help">硬回退前会自动打保险 tag，可在此一键恢复</p>
           <button class="btn" id="load-recovery" ${repo() ? "" : "disabled"}>加载恢复点</button>
           <div id="recovery-panel">
-            <div style="margin-top:14px">
+            <div style="margin-top:10px">
               <h3 style="font-size:13px">保险 tag</h3>
               <div class="card" id="backup-list"></div>
             </div>
-            <div style="margin-top:14px">
+            <div style="margin-top:10px">
               <h3 style="font-size:13px">reflog（兜底）</h3>
               <div class="card" id="reflog-list"></div>
             </div>
@@ -2119,8 +2118,8 @@ function renderAccountBlock() {
   api("/api/auth/token").then((d) => {
     box.innerHTML = d.token
       ? `<span class="badge badge-g">已保存 Token：${esc(d.token)}</span>
-         <span class="help" style="margin:0">仅本机使用；写操作（推送/发布）需要时自动带上，公开仓库无需 Token</span>`
-      : `<span class="help" style="margin:0">尚未保存 Token。推送 / 发布等写操作需要时会提示输入；公开仓库的克隆、下载、查看无需 Token。</span>`;
+         <span class="help" style="margin:0">写操作自动带上，公开仓库无需 Token</span>`
+      : `<span class="help" style="margin:0">尚未保存 Token，写操作需要时会提示输入</span>`;
   }).catch(() => { box.innerHTML = `<span class="help">无法读取 Token 状态</span>`; });
 }
 
@@ -2135,17 +2134,12 @@ function viewLogin(main) {
           <label>Personal Access Token</label>
           <input class="input" type="password" id="token" placeholder="ghp_…" autocomplete="off" required>
           <span class="help">
-            获取方式：GitHub → Settings → Developer settings → Personal access tokens →
-            Tokens (classic) → Generate new token，勾选 <code>repo</code>、<code>read:org</code> 权限。
+            GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)，勾选 <code>repo</code>、<code>read:org</code>。
             <a href="https://github.com/settings/tokens/new?scopes=repo,read:org" target="_blank">点此直达创建页</a>
           </span>
         </div>
         <button class="btn btn-primary" type="submit">保存</button>
       </form>
-      <p class="help" style="margin-top:14px">
-        说明：Token 只保存在本机（凭据管理器），供推送 / 发布等写操作使用；
-        公开仓库的克隆、下载、查看无需 Token。保存后可在设置页查看掩码形式。
-      </p>
     </div>`;
   const prev = location.hash;
   $("#login-form").onsubmit = async (e) => {
